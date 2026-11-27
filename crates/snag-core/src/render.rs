@@ -101,7 +101,7 @@ pub fn render_overlay(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::selection::PixelPoint;
+    use crate::geometry::PixelPoint;
 
     #[test]
     fn renders_dim_selection_and_scaled_controls_into_reused_buffer() {
@@ -118,7 +118,13 @@ mod tests {
             &frame[start..start + 4]
         }
         render_overlay(&image, None, ScaleFactor::ONE, &mut frame).unwrap();
-        assert!(frame.chunks_exact(4).all(|p| p == [64, 0, 0, 192]));
+        assert!(
+            frame
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [64, 0, 0, 192])
+        );
         render_overlay(&image, selection, ScaleFactor::ONE, &mut frame).unwrap();
         assert_eq!(pixel(&frame, 0, 0), [64, 0, 0, 192]);
         assert_eq!(pixel(&frame, 40, 40), [128, 0, 0, 128]);

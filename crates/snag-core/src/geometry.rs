@@ -20,6 +20,22 @@ pub struct Point {
     pub y: f64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PixelPoint {
+    pub x: i64,
+    pub y: i64,
+}
+
+impl Point {
+    /// Snap a logical pointer position to image pixels, including positions outside the image.
+    pub fn to_pixels(self, scale: ScaleFactor) -> Option<PixelPoint> {
+        (self.x.is_finite() && self.y.is_finite()).then(|| PixelPoint {
+            x: (self.x * scale.get()).round() as i64,
+            y: (self.y * scale.get()).round() as i64,
+        })
+    }
+}
+
 /// Opposite logical corners, in either drag direction.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
@@ -30,16 +46,12 @@ pub struct Rect {
 impl Rect {
     /// Snap shared edges identically and intersect with the image.
     pub fn to_pixels(self, scale: ScaleFactor, width: u32, height: u32) -> Option<PixelRect> {
-        fn snap(value: f64, scale: ScaleFactor, limit: u32) -> Option<u32> {
-            value
-                .is_finite()
-                .then(|| (value * scale.get()).round().clamp(0.0, f64::from(limit)) as u32)
-        }
-        let x1 = snap(self.start.x, scale, width)?;
-        let y1 = snap(self.start.y, scale, height)?;
-        let x2 = snap(self.end.x, scale, width)?;
-        let y2 = snap(self.end.y, scale, height)?;
-        PixelRect::new(x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2))
+        PixelRect::from_drag(
+            self.start.to_pixels(scale)?,
+            self.end.to_pixels(scale)?,
+            width,
+            height,
+        )
     }
 }
 
@@ -53,6 +65,22 @@ pub struct PixelRect {
 }
 
 impl PixelRect {
+    pub(crate) fn from_drag(
+        start: PixelPoint,
+        end: PixelPoint,
+        width: u32,
+        height: u32,
+    ) -> Option<Self> {
+        let clamp_x = |x: i64| x.clamp(0, i64::from(width)) as u32;
+        let clamp_y = |y: i64| y.clamp(0, i64::from(height)) as u32;
+        Self::new(
+            clamp_x(start.x.min(end.x)),
+            clamp_y(start.y.min(end.y)),
+            clamp_x(start.x.max(end.x)),
+            clamp_y(start.y.max(end.y)),
+        )
+    }
+
     pub fn new(left: u32, top: u32, right: u32, bottom: u32) -> Option<Self> {
         (left < right && top < bottom).then_some(Self {
             left,

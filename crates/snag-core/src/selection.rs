@@ -1,10 +1,4 @@
-use crate::geometry::{PixelRect, ScaleFactor};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PixelPoint {
-    pub x: i64,
-    pub y: i64,
-}
+use crate::geometry::{PixelPoint, PixelRect, ScaleFactor};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handle {
@@ -56,14 +50,7 @@ impl Selection {
         image_width: u32,
         image_height: u32,
     ) -> Option<Self> {
-        let clamp_x = |x: i64| x.clamp(0, i64::from(image_width)) as u32;
-        let clamp_y = |y: i64| y.clamp(0, i64::from(image_height)) as u32;
-        let rect = PixelRect::new(
-            clamp_x(start.x.min(end.x)),
-            clamp_y(start.y.min(end.y)),
-            clamp_x(start.x.max(end.x)),
-            clamp_y(start.y.max(end.y)),
-        )?;
+        let rect = PixelRect::from_drag(start, end, image_width, image_height)?;
         Some(Self {
             rect,
             image_width,
