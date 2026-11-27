@@ -31,6 +31,7 @@ enum Mode {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Gui,
+    ServeClipboard,
     Full {
         destination: Destination,
         delay_ms: Option<u64>,
@@ -49,6 +50,17 @@ impl Command {
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
     {
+        let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+        if args.iter().skip(1).any(|arg| arg == "--serve-clipboard") {
+            return if args.len() == 2 {
+                Ok(Self::ServeClipboard)
+            } else {
+                Err(Args::command().error(
+                    ErrorKind::ArgumentConflict,
+                    "--serve-clipboard must be used alone",
+                ))
+            };
+        }
         let args = Args::try_parse_from(args)?;
         if !matches!(args.mode, Some(Mode::Full)) {
             return Ok(Self::Gui);

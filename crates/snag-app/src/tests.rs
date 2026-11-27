@@ -177,3 +177,62 @@ fn attempts_both_destinations_and_reports_each_failure() {
     let error = save_and_copy(missing.clone(), &mut clipboard);
     assert!(error.contains(missing.to_str().unwrap()) && error.contains("clipboard unavailable"));
 }
+
+#[test]
+fn launcher_delivers_full_payload_and_returns_while_helper_is_alive() {
+    use crate::clipboard::launch::HelperClipboard;
+    use rustix::process::{Pid, Signal, WaitOptions, kill_process, waitpid};
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new();
+    let program = dir.0.join("helper");
+    fs::write(
+        &program,
+        r#"#!/bin/sh
+test "$1" = --serve-clipboard || exit 2
+cat > "$0.png" || exit 1
+echo $$ > "$0.pid"
+echo ready
+exec sleep 10
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+    let mut clipboard = HelperClipboard {
+        program: program.clone(),
+    };
+    let payload: Vec<u8> = (0..2_000_000).map(|i| (i % 251) as u8).collect();
+    clipboard.set_png(&payload).unwrap();
+    let pid = fs::read_to_string(program.with_extension("pid")).unwrap();
+    let pid = Pid::from_raw(pid.trim().parse().unwrap()).unwrap();
+    assert!(waitpid(Some(pid), WaitOptions::NOHANG).unwrap().is_none());
+    kill_process(pid, Signal::TERM).unwrap();
+    waitpid(Some(pid), WaitOptions::empty()).unwrap();
+    assert_eq!(fs::read(program.with_extension("png")).unwrap(), payload);
+}
+
+#[test]
+fn launcher_reports_helper_errors_and_silent_exit() {
+    use crate::clipboard::launch::HelperClipboard;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new();
+    let mut helper = HelperClipboard {
+        program: dir.0.join("helper"),
+    };
+    for (script, expected) in [
+        (
+            "echo 'error: selection unavailable'",
+            "selection unavailable",
+        ),
+        ("exit 1", "before reporting ownership"),
+    ] {
+        fs::write(
+            &helper.program,
+            format!("#!/bin/sh\ncat >/dev/null\n{script}\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&helper.program, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = helper.set_png(b"png").unwrap_err();
+        assert!(error.0.contains(expected), "{error}");
+    }
+}

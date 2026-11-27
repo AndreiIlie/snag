@@ -10,3 +10,10 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 snag-core = { path = "../snag-core" }
+ashpd.workspace = true
+x11rb.workspace = true
+rustix.workspace = true
+wayland-client.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+percent-encoding.workspace = true
