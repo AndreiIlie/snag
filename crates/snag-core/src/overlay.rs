@@ -111,7 +111,9 @@ impl Overlay {
         let Some(point) = self.view.capture_point(pointer) else {
             return false;
         };
-        self.pointer = Some(pointer);
+        if self.pointer.replace(pointer) == Some(pointer) {
+            return false;
+        }
         let Some((start, drag)) = self.drag else {
             return false;
         };
@@ -125,7 +127,7 @@ impl Overlay {
                 let anchor = s.handle_position(handle);
                 // Keep the grab offset until the pointer reaches the edge of the image.
                 let edge = |pos: i64, origin: i64, delta: i64, limit: u32| {
-                    if delta != 0 && (pos <= 0 || pos >= i64::from(limit)) {
+                    if pos <= 0 || pos >= i64::from(limit) {
                         pos
                     } else {
                         origin.saturating_add(delta)
@@ -247,6 +249,11 @@ mod tests {
         drag(&mut overlay, at(3, 4), at(220, 180));
         drag(&mut overlay, at(0, 0), at(0, 0));
         assert_eq!(overlay.crop(), PixelRect::new(3, 4, 220, 180));
+        overlay.press();
+        overlay.pointer_moved(at(30, 30));
+        overlay.pointer_moved(at(0, 0));
+        overlay.release();
+        assert_eq!(overlay.crop(), PixelRect::new(0, 0, 220, 180));
     }
 
     #[test]
@@ -265,6 +272,24 @@ mod tests {
             assert!(!overlay.pointer_moved(at(90, 60)));
             overlay.release();
             assert_eq!(overlay.selection, selection.resized(handle, to));
+        }
+    }
+
+    #[test]
+    fn scaled_handle_hits_and_drags_use_capture_pixels() {
+        let view = View::fit((800, 400), (400, 400)).unwrap();
+        for handle in Handle::ALL {
+            let mut overlay = Overlay::new(view, ScaleFactor::new(2.0).unwrap());
+            drag(&mut overlay, at(30, 130), at(220, 250));
+            let selection = overlay.selection().unwrap();
+            let centre = view.window_point(selection.handle_position(handle));
+            // Eight window pixels from the handle is sixteen capture pixels at this fit.
+            let press = at(centre.x as i32 + 8, centre.y as i32);
+            overlay.pointer_moved(press);
+            assert_eq!(overlay.cursor(), Cursor::Resize(handle));
+            drag(&mut overlay, press, at(98, 160));
+            let target = PixelPoint { x: 180, y: 120 };
+            assert_eq!(overlay.selection(), selection.resized(handle, target));
         }
     }
 
