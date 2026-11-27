@@ -1,10 +1,17 @@
+mod backdrop;
+mod buttons;
+
 use crate::{
     geometry::ScaleFactor,
     image::RgbaImage,
+    overlay::Overlay,
     selection::{Handle, Selection, handle_size},
+    toolbar::Toolbar,
+    view::View,
 };
+use backdrop::Backdrop;
 use std::{error::Error, fmt};
-use tiny_skia::{ColorU8, Paint, PixmapMut, Rect, Transform};
+use tiny_skia::{Paint, PixmapMut, Rect, Transform};
 
 const DIM: [u8; 4] = [0, 0, 0, 128];
 const BORDER: [u8; 4] = [60, 155, 255, 255];
@@ -33,26 +40,75 @@ pub fn render_overlay(
     scale: ScaleFactor,
     buffer: &mut [u8],
 ) -> Result<(), RenderError> {
-    if buffer.len() != image.pixels().len() {
-        return Err(RenderError::InvalidBuffer);
-    }
-    if selection
-        .is_some_and(|s| s.rect().right() > image.width() || s.rect().bottom() > image.height())
-    {
+    let size = (image.width(), image.height());
+    let view = View::fit(size, size).ok_or(RenderError::InvalidBuffer)?;
+    if selection.is_some_and(|s| s.rect().right() > size.0 || s.rect().bottom() > size.1) {
         return Err(RenderError::SelectionOutsideImage);
     }
-    let mut frame = PixmapMut::from_bytes(buffer, image.width(), image.height())
-        .ok_or(RenderError::InvalidBuffer)?;
-    for (dest, &[r, g, b, a]) in frame
-        .pixels_mut()
-        .iter_mut()
-        .zip(image.pixels().as_chunks::<4>().0)
-    {
-        *dest = ColorU8::from_rgba(r, g, b, a).premultiply();
+    FrameRenderer::new(image).draw(view, selection, scale, None, buffer)
+}
+
+pub struct FrameRenderer<'a> {
+    backdrop: Backdrop<'a>,
+}
+
+impl<'a> FrameRenderer<'a> {
+    pub fn new(image: &'a RgbaImage) -> Self {
+        Self {
+            backdrop: Backdrop::new(image),
+        }
     }
 
-    let width = f64::from(image.width());
-    let height = f64::from(image.height());
+    pub fn render(&mut self, overlay: &Overlay, buffer: &mut [u8]) -> Result<(), RenderError> {
+        self.draw(
+            overlay.view(),
+            overlay.selection(),
+            overlay.scale(),
+            overlay.toolbar(),
+            buffer,
+        )
+    }
+
+    fn draw(
+        &mut self,
+        view: View,
+        selection: Option<Selection>,
+        scale: ScaleFactor,
+        toolbar: Option<Toolbar>,
+        buffer: &mut [u8],
+    ) -> Result<(), RenderError> {
+        let (width, height) = view.window;
+        if buffer.len() as u64 / 4 != u64::from(width) * u64::from(height)
+            || !buffer.len().is_multiple_of(4)
+        {
+            return Err(RenderError::InvalidBuffer);
+        }
+        let mut frame =
+            PixmapMut::from_bytes(buffer, width, height).ok_or(RenderError::InvalidBuffer)?;
+        self.backdrop.draw(view, &mut frame)?;
+        draw_selection(&mut frame, view, selection, scale);
+        if let Some(bar) = toolbar {
+            buttons::draw(&mut frame, bar);
+        }
+        Ok(())
+    }
+}
+
+/// Convert premultiplied RGBA over black to native presentation words in place.
+pub fn pack_frame(words: &mut [u32]) {
+    for word in words {
+        let [r, g, b, _] = word.to_ne_bytes();
+        *word = u32::from_be_bytes([0, r, g, b]);
+    }
+}
+
+fn draw_selection(
+    frame: &mut PixmapMut<'_>,
+    view: View,
+    selection: Option<Selection>,
+    scale: ScaleFactor,
+) {
+    let (width, height) = (f64::from(frame.width()), f64::from(frame.height()));
     let mut fill = |left: f64, top: f64, right: f64, bottom: f64, [r, g, b, a]: [u8; 4]| {
         if let Some(rect) = Rect::from_ltrb(
             left.max(0.0) as f32,
@@ -70,9 +126,9 @@ pub fn render_overlay(
     };
     let Some(selection) = selection else {
         fill(0.0, 0.0, width, height, DIM);
-        return Ok(());
+        return;
     };
-    let rect = selection.rect();
+    let rect = view.window_rect(selection.rect());
     let left = f64::from(rect.left());
     let top = f64::from(rect.top());
     let right = f64::from(rect.right());
@@ -90,18 +146,48 @@ pub fn render_overlay(
 
     let side = handle_size(scale).min(2.0 * width.max(height) + 2.0);
     for handle in Handle::ALL {
-        let center = selection.handle_position(handle);
+        let center = view.window_point(selection.handle_position(handle));
         let x = center.x as f64 - (side / 2.0).floor();
         let y = center.y as f64 - (side / 2.0).floor();
         fill(x, y, x + side, y + side, HANDLE);
     }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geometry::PixelPoint;
+
+    #[test]
+    fn fitted_frame_draws_letterbox_crop_and_toolbar_and_packs_in_place() {
+        use crate::geometry::Point;
+        let image = RgbaImage::new(400, 200, [200, 60, 10, 255].repeat(400 * 200)).unwrap();
+        let view = View::fit((400, 200), (200, 200)).unwrap();
+        let mut overlay = Overlay::new(view, ScaleFactor::ONE);
+        overlay.pointer_moved(Point { x: 20.0, y: 70.0 });
+        overlay.press();
+        overlay.pointer_moved(Point { x: 130.0, y: 120.0 });
+        overlay.release();
+        let mut renderer = FrameRenderer::new(&image);
+        let mut words = vec![0; 200 * 200];
+        renderer
+            .render(&overlay, bytemuck::cast_slice_mut(&mut words))
+            .unwrap();
+        pack_frame(&mut words);
+        assert_eq!(words[0], 0);
+        assert_eq!(words[60 * 200 + 5], 0x641e05);
+        assert_eq!(words[90 * 200 + 60], 0xc83c0a);
+        for (_, r) in overlay.toolbar().unwrap().buttons() {
+            let index = ((r.top() + 4) * 200 + r.left() + 8) as usize;
+            assert_eq!(words[index], 0x21252b);
+        }
+        let first = words.clone();
+        renderer
+            .render(&overlay, bytemuck::cast_slice_mut(&mut words))
+            .unwrap();
+        pack_frame(&mut words);
+        assert_eq!(words, first);
+    }
 
     #[test]
     fn renders_dim_selection_and_scaled_controls_into_reused_buffer() {

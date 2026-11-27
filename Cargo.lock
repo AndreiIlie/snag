@@ -547,6 +547,7 @@ dependencies = [
 name = "snag-core"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "png",
  "serde",
  "tiny-skia",
