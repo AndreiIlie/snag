@@ -95,7 +95,7 @@ impl Overlay {
         self.document
     }
 
-    pub(crate) fn layers(&self) -> impl Iterator<Item = &Annotation> {
+    pub(crate) fn layers(&self) -> impl Iterator<Item = &Annotation> + Clone {
         self.document
             .layers
             .iter()

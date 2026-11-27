@@ -185,3 +185,6 @@ impl Command<Document> for Edit {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

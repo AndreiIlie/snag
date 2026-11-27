@@ -99,6 +99,22 @@ impl PixelRect {
         })
     }
 
+    pub(crate) fn intersection(self, other: Self) -> Option<Self> {
+        Self::new(
+            self.left.max(other.left),
+            self.top.max(other.top),
+            self.right.min(other.right),
+            self.bottom.min(other.bottom),
+        )
+    }
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
     pub fn left(self) -> u32 {
         self.left
     }

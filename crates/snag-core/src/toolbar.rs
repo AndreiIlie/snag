@@ -44,7 +44,7 @@ impl Toolbar {
         }
         let px = |logical: f64| (logical * scale.get()).round().max(1.0) as u32;
         let spaces = count - 1 + 4;
-        let gap = px(4.0).min((width - count) / spaces);
+        let gap = px(4.0).min(width / (8 * count + spaces));
         let side = px(32.0).min((width - gap * spaces) / count).min(height);
         let left = region.right().saturating_sub(count * side + spaces * gap);
         let below = region.bottom().saturating_add(gap);
