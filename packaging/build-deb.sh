@@ -41,6 +41,7 @@ cargo metadata --locked --format-version 1 --filter-platform "$host" > "$work/me
 perl -MJSON::PP -e '
     use strict;
     use warnings;
+    binmode STDOUT, ":encoding(UTF-8)";
     my ($tree, $metadata) = @ARGV;
     open my $list, "<", $tree or die "$tree: $!";
     my %used;
