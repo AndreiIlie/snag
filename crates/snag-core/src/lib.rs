@@ -1,6 +1,7 @@
 pub mod annotation;
 pub mod config;
 pub mod export;
+pub mod filename;
 mod font;
 pub mod geometry;
 pub mod history;

@@ -1,4 +1,5 @@
-use serde::Deserialize;
+use crate::filename::FilenameTemplate;
+use serde::{Deserialize, de::Error as _};
 use std::{
     env,
     error::Error,
@@ -10,12 +11,20 @@ use std::{
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub capture: CaptureConfig,
+    pub save: SaveConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct CaptureConfig {
     pub delay_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct SaveConfig {
+    pub directory: Option<PathBuf>,
+    pub filename: FilenameTemplate,
 }
 
 #[derive(Debug)]
@@ -72,7 +81,30 @@ fn resolve_path(xdg: Option<&Path>, home: Option<&Path>) -> Result<PathBuf, Conf
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+        Self::parse_with_home(text, env::var_os("HOME").as_deref().map(Path::new))
+    }
+
+    fn parse_with_home(text: &str, home: Option<&Path>) -> Result<Self, toml::de::Error> {
+        let mut config: Self = toml::from_str(text)?;
+        if let Some(dir) = &mut config.save.directory {
+            let bytes = dir.as_os_str().as_encoded_bytes();
+            if bytes.contains(&0) {
+                return Err(toml::de::Error::custom("save.directory contains NUL"));
+            }
+            if bytes.starts_with(b"~/") {
+                let home = home.filter(|path| path.is_absolute()).ok_or_else(|| {
+                    toml::de::Error::custom(
+                        "save.directory starts with ~/ but HOME is not absolute",
+                    )
+                })?;
+                *dir = home.join(dir.strip_prefix("~").expect("path starts with ~/"));
+            } else if !dir.is_absolute() {
+                return Err(toml::de::Error::custom(
+                    "save.directory must be absolute or start with ~/",
+                ));
+            }
+        }
+        Ok(config)
     }
 
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
@@ -93,6 +125,40 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_save_presets_when_parsing_config() {
+        let home = Some(Path::new("/user"));
+        assert_eq!(Config::parse("[save]").unwrap().save, SaveConfig::default());
+        for (dir, expected) in [
+            ("~/Pictures", "/user/Pictures"),
+            ("~/", "/user"),
+            ("/shots", "/shots"),
+        ] {
+            let text = format!("[save]\ndirectory = '{dir}'");
+            assert_eq!(
+                Config::parse_with_home(&text, home)
+                    .unwrap()
+                    .save
+                    .directory
+                    .as_deref(),
+                Some(Path::new(expected))
+            );
+        }
+        for (dir, home) in [
+            ("", home),
+            ("relative", home),
+            ("~", home),
+            ("~/shots", None),
+            ("~/shots", Some(Path::new("relative"))),
+        ] {
+            assert!(
+                Config::parse_with_home(&format!("[save]\ndirectory = '{dir}'"), home).is_err()
+            );
+        }
+        assert!(Config::parse("[save]\nfilename = '%x'").is_err());
+        assert!(Config::parse("[save]\nother = 1").is_err());
+    }
 
     #[test]
     fn resolves_only_absolute_config_directories() {

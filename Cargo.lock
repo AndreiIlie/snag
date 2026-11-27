@@ -1473,6 +1473,7 @@ dependencies = [
  "ashpd",
  "bytemuck",
  "clap",
+ "libc",
  "percent-encoding",
  "rustix 1.1.6",
  "snag-core",

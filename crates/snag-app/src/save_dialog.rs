@@ -3,16 +3,23 @@ use ashpd::desktop::{
     ResponseError,
     file_chooser::{FileFilter, SelectedFiles},
 };
-use std::{error::Error, path::PathBuf};
+use std::{
+    error::Error,
+    path::{Path, PathBuf},
+};
 
 pub struct Portal;
 
 impl SaveDialog for Portal {
-    fn path(self) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    fn path(self, directory: Option<&Path>, name: &str) -> Result<Option<PathBuf>, Box<dyn Error>> {
         let request = SelectedFiles::save_file()
             .title("Save screenshot")
-            .current_name("screenshot.png")
+            .current_name(name)
             .filter(FileFilter::new("PNG image").mimetype("image/png"));
+        let request = match directory {
+            Some(path) => request.current_folder(path)?,
+            None => request,
+        };
         let result = ashpd::zbus::block_on(request.send()).and_then(|r| r.response());
         match result {
             Ok(files) => {
