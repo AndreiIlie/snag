@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Snag
+GenericName=Screenshot Tool
+Comment=Capture, annotate and copy screenshots
+Exec=snag
+Icon=snag
+Terminal=false
+Categories=Graphics;
+Keywords=screenshot;capture;annotate;snip;
+StartupNotify=false
+StartupWMClass=snag
