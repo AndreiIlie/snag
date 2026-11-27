@@ -1,10 +1,12 @@
-use super::{Owner, PNG_MIME, Png, Result};
+use super::{Owner, PNG_MIME, Png, Result, TRANSFER_TIMEOUT};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use std::{
     fs::File,
     io::{self, Write},
     os::fd::OwnedFd,
+    sync::mpsc,
     thread,
+    time::Instant,
 };
 use wayland_client::{
     Connection, Dispatch, EventQueue, QueueHandle, delegate_noop, event_created_child,
@@ -30,9 +32,45 @@ fn send_png(fd: OwnedFd, png: &[u8]) -> io::Result<()> {
     File::from(fd).write_all(png)
 }
 
+struct Writers {
+    active: mpsc::Sender<()>,
+    finished: mpsc::Receiver<()>,
+}
+
+impl Writers {
+    fn new() -> Self {
+        let (active, finished) = mpsc::channel();
+        Self { active, finished }
+    }
+
+    fn write(&self, fd: OwnedFd, png: Png) {
+        let active = self.active.clone();
+        // Each paste runs independently. The last writer disconnects the channel during drain.
+        thread::spawn(move || {
+            let _ = send_png(fd, &png);
+            drop(active);
+        });
+    }
+
+    fn drain(self, deadline: Instant) {
+        drop(self.active);
+        let _ = self
+            .finished
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
+}
+
 struct State {
     png: Png,
-    lost: bool,
+    writers: Writers,
+    drain_deadline: Option<Instant>,
+}
+
+impl State {
+    fn lost(&mut self) {
+        self.drain_deadline
+            .get_or_insert_with(|| Instant::now() + TRANSFER_TIMEOUT);
+    }
 }
 
 struct WaylandOwner {
@@ -59,9 +97,14 @@ pub(super) fn claim(png: Png) -> Result<Box<dyn Owner>> {
         source.offer(PNG_MIME.into());
         device.set_selection(Some(&source));
     }
-    let mut state = State { png, lost: false };
+    let mut state = State {
+        png,
+        writers: Writers::new(),
+        drain_deadline: None,
+    };
     queue.roundtrip(&mut state)?;
-    if state.lost {
+    if let Some(deadline) = state.drain_deadline {
+        state.writers.drain(deadline);
         return Err("Wayland clipboard ownership lost during claim".into());
     }
     Ok(Box::new(WaylandOwner { queue, state }))
@@ -69,10 +112,13 @@ pub(super) fn claim(png: Png) -> Result<Box<dyn Owner>> {
 
 impl Owner for WaylandOwner {
     fn wait_until_lost(mut self: Box<Self>) -> Result<()> {
-        while !self.state.lost {
+        loop {
+            if let Some(deadline) = self.state.drain_deadline {
+                self.state.writers.drain(deadline);
+                return Ok(());
+            }
             self.queue.blocking_dispatch(&mut self.state)?;
         }
-        Ok(())
     }
 }
 
@@ -101,7 +147,7 @@ macro_rules! dispatch_data_control {
                 match event {
                     $device::Event::Selection { id: Some(offer) }
                     | $device::Event::PrimarySelection { id: Some(offer) } => offer.destroy(),
-                    $device::Event::Finished => state.lost = true,
+                    $device::Event::Finished => state.lost(),
                     _ => (),
                 }
             }
@@ -115,11 +161,9 @@ macro_rules! dispatch_data_control {
                 _: &Connection, _: &QueueHandle<Self>) {
                 match event {
                     $source::Event::Send { mime_type, fd } if mime_type == PNG_MIME => {
-                        // A slow or abandoned reader must not block cancellation or another paste.
-                        let png = state.png.clone();
-                        thread::spawn(move || { let _ = send_png(fd, &png); });
+                        state.writers.write(fd, state.png.clone());
                     }
-                    $source::Event::Cancelled => state.lost = true,
+                    $source::Event::Cancelled => state.lost(),
                     _ => (),
                 }
             }
@@ -139,3 +183,68 @@ dispatch_data_control!(
     wlr_source::ZwlrDataControlSourceV1,
     ZwlrDataControlOfferV1
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{io::Read, os::unix::net::UnixStream, time::Duration};
+
+    // Fill the socket before starting the paste so the writer needs the reader to make progress.
+    fn pending_paste() -> (Writers, UnixStream, usize, Png) {
+        let (mut socket, reader) = UnixStream::pair().unwrap();
+        socket.set_nonblocking(true).unwrap();
+        let mut buffered = 0;
+        loop {
+            match socket.write(&[0; 8192]) {
+                Ok(n) => buffered += n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let png = Png::new(vec![0xab; buffered + 8192]);
+        let writers = Writers::new();
+        writers.write(socket.into(), png.clone());
+        (writers, reader, buffered, png)
+    }
+
+    #[test]
+    fn waits_for_a_paste_to_finish() {
+        let (writers, mut reader, buffered, png) = pending_paste();
+        let (drained, wait) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            assert_eq!(
+                wait.recv_timeout(Duration::from_millis(50)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let start = Instant::now();
+        writers.drain(start + TRANSFER_TIMEOUT);
+        let _ = drained.send(());
+        assert!(start.elapsed() < TRANSFER_TIMEOUT / 2);
+        assert_eq!(&reader.join().unwrap()[buffered..], png.as_slice());
+    }
+
+    #[test]
+    fn stops_waiting_for_a_stalled_reader_at_the_deadline() {
+        let (writers, reader, _, _) = pending_paste();
+        let timeout = Duration::from_millis(50);
+        let (drained, wait) = mpsc::channel();
+        thread::spawn(move || {
+            let start = Instant::now();
+            writers.drain(start + timeout);
+            drained.send(start.elapsed()).unwrap();
+        });
+        assert!(wait.recv_timeout(Duration::from_secs(2)).unwrap() >= timeout);
+        drop(reader);
+    }
+
+    #[test]
+    fn drains_immediately_without_a_writer() {
+        let start = Instant::now();
+        Writers::new().drain(start + TRANSFER_TIMEOUT);
+        assert!(start.elapsed() < TRANSFER_TIMEOUT / 2);
+    }
+}
