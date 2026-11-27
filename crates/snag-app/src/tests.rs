@@ -36,6 +36,13 @@ impl OverlayWindow for Choice {
         Ok(self)
     }
 }
+fn choice(action: Action, crop: Option<PixelRect>) -> Choice {
+    Choice {
+        action,
+        crop,
+        annotations: Default::default(),
+    }
+}
 impl SaveDialog for Option<PathBuf> {
     fn path(self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         Ok(self)
@@ -232,7 +239,7 @@ fn gui_copy_encodes_the_selected_capture_pixels_and_honors_delay() {
             &config,
             &mut capture,
             &mut clipboard,
-            (Action::Copy, crop),
+            choice(Action::Copy, crop),
             Unused,
             |d| slept = Some(d),
         )
@@ -260,13 +267,13 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         copy,
         delay_ms: None,
     };
-    let save = (Action::Save, crop);
+    let save = || choice(Action::Save, crop);
     run(
         gui(None, false),
         &Config::default(),
         &mut capture,
         &mut clipboard,
-        save,
+        save(),
         Some(file.clone()),
         |_| {},
     )
@@ -279,7 +286,7 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         &Config::default(),
         &mut capture,
         &mut clipboard,
-        save,
+        save(),
         Unused,
         |_| {},
     )
@@ -293,7 +300,7 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         &Config::default(),
         &mut capture,
         &mut clipboard,
-        save,
+        save(),
         Unused,
         |_| {},
     )
@@ -320,7 +327,7 @@ fn cancelling_the_overlay_or_dialog_preserves_destinations() {
             &Config::default(),
             &mut capture,
             &mut clipboard,
-            (action, None),
+            choice(action, None),
             None,
             |_| {},
         )
@@ -387,5 +394,66 @@ fn launcher_reports_helper_errors_and_silent_exit() {
         fs::set_permissions(&helper.program, fs::Permissions::from_mode(0o700)).unwrap();
         let error = helper.set_png(b"png").unwrap_err();
         assert!(error.0.contains(expected), "{error}");
+    }
+}
+
+#[test]
+fn gui_copy_and_save_deliver_the_drawn_annotation_in_the_crop() {
+    use snag_core::{
+        annotation::Tool,
+        geometry::Point,
+        overlay::{Key, Overlay},
+        view::View,
+    };
+    let image = RgbaImage::new(128, 96, [15, 25, 35, 255].repeat(128 * 96)).unwrap();
+    let mut capture = FakeCapture::new(Ok(Screenshot {
+        image,
+        scale: ScaleFactor::ONE,
+    }));
+    let mut overlay = Overlay::new(View::fit((128, 96), (128, 96)).unwrap(), ScaleFactor::ONE);
+    let drag = |o: &mut Overlay, start: (f64, f64), end: (f64, f64)| {
+        o.pointer_moved(Point {
+            x: start.0,
+            y: start.1,
+        });
+        o.press();
+        o.pointer_moved(Point { x: end.0, y: end.1 });
+        o.release();
+    };
+    drag(&mut overlay, (10., 10.), (110., 76.));
+    overlay.key(Key::Tool(Tool::Line));
+    drag(&mut overlay, (30., 45.), (90., 45.));
+    let crop = overlay.crop();
+    let doc = overlay.into_document();
+    let dir = TempDir::new();
+    let file = dir.0.join("annotated.png");
+    let mut clipboard = MemoryClipboard::default();
+    for action in [Action::Copy, Action::Save] {
+        run(
+            Command::Gui {
+                output: Some(file.clone()),
+                copy: false,
+                delay_ms: None,
+            },
+            &Config::default(),
+            &mut capture,
+            &mut clipboard,
+            Choice {
+                action,
+                crop,
+                annotations: doc.clone(),
+            },
+            Unused,
+            |_| {},
+        )
+        .unwrap();
+        let bytes = match action {
+            Action::Copy => clipboard.png().unwrap().to_vec(),
+            _ => fs::read(&file).unwrap(),
+        };
+        let result = decode_png(&bytes).unwrap();
+        assert_eq!((result.width(), result.height()), (100, 66));
+        let i = (35 * 100 + 50) * 4;
+        assert_eq!(&result.pixels()[i..i + 4], &[255, 0, 0, 255]);
     }
 }

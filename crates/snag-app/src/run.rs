@@ -1,14 +1,19 @@
 use crate::cli::{Command, Destination};
 use snag_core::{
+    annotation::Document,
     config::Config,
-    export::{ExportError, encode_png},
+    export::{ExportError, encode_annotated_png},
     geometry::PixelRect,
     platform::{CaptureError, ClipboardBackend, ClipboardError, ScreenCapture, Screenshot},
     toolbar::Action,
 };
 use std::{error::Error, fmt, fs, path::PathBuf, time::Duration};
 
-pub type Choice = (Action, Option<PixelRect>);
+pub struct Choice {
+    pub action: Action,
+    pub crop: Option<PixelRect>,
+    pub annotations: Document,
+}
 
 pub trait OverlayWindow {
     fn choose(self, shot: &Screenshot) -> Result<Choice, Box<dyn Error>>;
@@ -74,16 +79,20 @@ pub fn run(
         sleep(Duration::from_millis(delay));
     }
     let shot = capture.capture().map_err(RunError::Capture)?;
-    let (crop, file, copy) = match command {
+    let (crop, annotations, file, copy) = match command {
         Command::Full { destination, .. } => match destination {
-            Destination::File { path, copy } => (None, Ok(Some(path)), copy),
-            Destination::Clipboard => (None, Ok(None), true),
+            Destination::File { path, copy } => (None, Document::default(), Ok(Some(path)), copy),
+            Destination::Clipboard => (None, Document::default(), Ok(None), true),
         },
         Command::Gui { output, copy, .. } => {
-            let (action, crop) = overlay.choose(&shot).map_err(RunError::Overlay)?;
+            let Choice {
+                action,
+                crop,
+                annotations,
+            } = overlay.choose(&shot).map_err(RunError::Overlay)?;
             match action {
                 Action::Cancel => return Err(RunError::Cancelled),
-                Action::Copy => (crop, Ok(None), true),
+                Action::Copy => (crop, annotations, Ok(None), true),
                 Action::Save => {
                     let path = match output {
                         Some(path) => Ok(Some(path)),
@@ -94,13 +103,13 @@ pub fn run(
                             }
                         },
                     };
-                    (crop, path, copy)
+                    (crop, annotations, path, copy)
                 }
             }
         }
         Command::ServeClipboard => unreachable!(),
     };
-    let png = encode_png(&shot.image, crop).map_err(RunError::Export)?;
+    let png = encode_annotated_png(&shot.image, &annotations, crop).map_err(RunError::Export)?;
     deliver(&png, file, copy, clipboard)
 }
 

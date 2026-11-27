@@ -1,5 +1,8 @@
+pub(crate) mod annotations;
 mod backdrop;
 mod buttons;
+pub(crate) mod mosaic;
+mod path;
 
 use crate::{
     geometry::ScaleFactor,
@@ -53,9 +56,48 @@ pub fn render_overlay(
     let mut frame =
         PixmapMut::from_bytes(buffer, width, height).ok_or(RenderError::InvalidBuffer)?;
     backdrop.draw(view, &mut frame)?;
+    let bounds = view.bounds;
+    let ts = Transform::from_row(
+        view.scale as f32,
+        0.,
+        0.,
+        view.scale as f32,
+        bounds.left() as f32,
+        bounds.top() as f32,
+    );
+    backdrop.mosaics.update(backdrop.image, overlay.layers())?;
+    let mut count = 0;
+    for (i, shape) in overlay.layers().enumerate() {
+        annotations::draw_layer(&mut frame, ts, shape, &mut count, backdrop.mosaics.get(i));
+    }
+    if overlay.layers().next().is_some() && (bounds.width(), bounds.height()) != view.window {
+        // Restore the margins after painting strokes that cross the capture edges.
+        let black = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap();
+        for (y, row) in frame
+            .pixels_mut()
+            .chunks_exact_mut(width as usize)
+            .enumerate()
+        {
+            if (bounds.top() as usize..bounds.bottom() as usize).contains(&y) {
+                row[..bounds.left() as usize].fill(black);
+                row[bounds.right() as usize..].fill(black);
+            } else {
+                row.fill(black);
+            }
+        }
+    }
     draw_selection(&mut frame, view, overlay.selection(), overlay.scale());
+    if let Some(shape) = overlay.selected() {
+        annotations::marker(
+            &mut frame,
+            shape,
+            ts,
+            bounds,
+            overlay.scale().get().round().max(1.) as f32,
+        );
+    }
     if let Some(bar) = overlay.toolbar() {
-        buttons::draw(&mut frame, bar);
+        buttons::draw(&mut frame, bar, overlay);
     }
     Ok(())
 }
@@ -145,9 +187,14 @@ mod tests {
         assert_eq!(words[0], 0);
         assert_eq!(words[60 * 200 + 5], 0x641e05);
         assert_eq!(words[90 * 200 + 60], 0xc83c0a);
-        for (_, r) in overlay.toolbar().unwrap().buttons() {
-            let index = ((r.top() + 4) * 200 + r.left() + 8) as usize;
-            assert_eq!(words[index], 0x21252b);
+        for (button, r) in overlay.toolbar().unwrap().buttons() {
+            let index = (r.top() * 200 + r.left() + r.width() / 2) as usize;
+            let background = if overlay.active(button) {
+                0x1c68ac
+            } else {
+                0x21252b
+            };
+            assert_eq!(words[index], background);
         }
         let first = words.clone();
         render_overlay(

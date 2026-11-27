@@ -1,5 +1,6 @@
 use crate::run::{Choice, OverlayWindow};
 use snag_core::{
+    annotation::Tool,
     geometry::{Point, ScaleFactor},
     overlay::{Cursor, Key, Overlay},
     platform::Screenshot,
@@ -36,7 +37,12 @@ impl OverlayWindow for FullscreenOverlay {
             result: None,
         };
         EventLoop::new()?.run_app(&mut app)?;
-        app.result.ok_or("overlay closed without an action")?
+        let action = app.result.ok_or("overlay closed without an action")??;
+        Ok(Choice {
+            action,
+            crop: app.model.crop(),
+            annotations: app.model.into_document(),
+        })
     }
 }
 
@@ -48,7 +54,7 @@ struct App<'a> {
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     modifiers: ModifiersState,
     cursor: Option<Cursor>,
-    result: Option<Result<Choice, Box<dyn Error>>>,
+    result: Option<Result<Action, Box<dyn Error>>>,
 }
 
 impl App<'_> {
@@ -100,7 +106,7 @@ impl App<'_> {
         Ok(())
     }
 
-    fn finish(&mut self, events: &ActiveEventLoop, result: Result<Choice, Box<dyn Error>>) {
+    fn finish(&mut self, events: &ActiveEventLoop, result: Result<Action, Box<dyn Error>>) {
         self.result = Some(result);
         events.exit();
     }
@@ -162,25 +168,13 @@ impl ApplicationHandler for App<'_> {
                 is_synthetic: false,
                 ..
             } if event.state.is_pressed() && !event.repeat => {
-                let key = match event.logical_key.as_ref() {
-                    LogicalKey::Named(NamedKey::Enter) => Some(Key::Enter),
-                    LogicalKey::Named(NamedKey::Escape) => Some(Key::Escape),
-                    LogicalKey::Character(c)
-                        if self.modifiers == ModifiersState::CONTROL
-                            && c.eq_ignore_ascii_case("c") =>
-                    {
-                        Some(Key::Copy)
-                    }
-                    LogicalKey::Character(c)
-                        if self.modifiers == ModifiersState::CONTROL
-                            && c.eq_ignore_ascii_case("s") =>
-                    {
-                        Some(Key::Save)
-                    }
-                    _ => None,
-                };
-                action = key.map(Key::action);
-                false
+                if let Some(key) = shortcut(event.logical_key.as_ref(), self.modifiers) {
+                    let (redraw, closing) = self.model.key(key);
+                    action = closing;
+                    redraw
+                } else {
+                    false
+                }
             }
             WindowEvent::Focused(false) => {
                 self.modifiers = ModifiersState::empty();
@@ -193,7 +187,7 @@ impl ApplicationHandler for App<'_> {
             _ => return,
         };
         if let Some(action) = action {
-            self.finish(events, Ok((action, self.model.crop())));
+            self.finish(events, Ok(action));
             return;
         }
         let cursor = self.model.cursor();
@@ -213,5 +207,80 @@ impl ApplicationHandler for App<'_> {
         if redraw {
             window.request_redraw();
         }
+    }
+}
+
+fn shortcut(key: LogicalKey<&str>, modifiers: ModifiersState) -> Option<Key> {
+    match key {
+        LogicalKey::Named(NamedKey::Escape) => Some(Key::Escape),
+        LogicalKey::Named(NamedKey::Enter) => Some(Key::Enter),
+        LogicalKey::Named(NamedKey::Delete) if modifiers.is_empty() => Some(Key::Delete),
+        LogicalKey::Character(text) => {
+            let [letter] = text.as_bytes() else {
+                return None;
+            };
+            let c = letter.to_ascii_lowercase();
+            if modifiers == ModifiersState::CONTROL | ModifiersState::SHIFT {
+                return (c == b'z').then_some(Key::Redo);
+            }
+            if modifiers == ModifiersState::CONTROL {
+                return match c {
+                    b'c' => Some(Key::Copy),
+                    b's' => Some(Key::Save),
+                    b'z' => Some(Key::Undo),
+                    _ => None,
+                };
+            }
+            if !modifiers.is_empty() {
+                return None;
+            }
+            let tool = match c {
+                b'a' => Tool::Arrow,
+                b'r' => Tool::Rectangle,
+                b'c' => Tool::Ellipse,
+                b'd' => Tool::Line,
+                b'p' => Tool::Pen,
+                b'm' => Tool::Highlighter,
+                b'b' => Tool::Pixelate,
+                b'n' => Tool::Counter,
+                _ => return None,
+            };
+            Some(Key::Tool(tool))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn shortcuts_distinguish_tools_from_copy_and_history() {
+        for (c, tool) in ["a", "r", "c", "d", "p", "m", "b", "n"]
+            .into_iter()
+            .zip(Tool::ALL)
+        {
+            assert_eq!(
+                shortcut(LogicalKey::Character(c), ModifiersState::empty()),
+                Some(Key::Tool(tool))
+            );
+        }
+        for (c, mods, expected) in [
+            ("c", ModifiersState::CONTROL, Some(Key::Copy)),
+            ("s", ModifiersState::CONTROL, Some(Key::Save)),
+            ("z", ModifiersState::CONTROL, Some(Key::Undo)),
+            (
+                "Z",
+                ModifiersState::CONTROL | ModifiersState::SHIFT,
+                Some(Key::Redo),
+            ),
+            ("p", ModifiersState::ALT, None),
+        ] {
+            assert_eq!(shortcut(LogicalKey::Character(c), mods), expected);
+        }
+        assert_eq!(
+            shortcut(LogicalKey::Named(NamedKey::Delete), ModifiersState::empty()),
+            Some(Key::Delete)
+        );
     }
 }

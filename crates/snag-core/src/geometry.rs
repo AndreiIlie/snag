@@ -26,6 +26,15 @@ pub struct PixelPoint {
     pub y: i64,
 }
 
+impl PixelPoint {
+    pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
+    pub(crate) fn plus(self, other: Self) -> Self {
+        Self {
+            x: self.x.saturating_add(other.x),
+            y: self.y.saturating_add(other.y),
+        }
+    }
+}
 impl Point {
     /// Snap a logical pointer position to image pixels, including positions outside the image.
     pub fn to_pixels(self, scale: ScaleFactor) -> Option<PixelPoint> {
@@ -90,6 +99,22 @@ impl PixelRect {
         })
     }
 
+    pub(crate) fn intersection(self, other: Self) -> Option<Self> {
+        Self::new(
+            self.left.max(other.left),
+            self.top.max(other.top),
+            self.right.min(other.right),
+            self.bottom.min(other.bottom),
+        )
+    }
+    pub(crate) fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            top: self.top.min(other.top),
+            right: self.right.max(other.right),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
     pub fn left(self) -> u32 {
         self.left
     }

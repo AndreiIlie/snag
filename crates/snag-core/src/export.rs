@@ -1,6 +1,11 @@
 use crate::{
+    annotation::Document,
     geometry::PixelRect,
     image::{ImageError, RgbaImage},
+    render::{
+        annotations::draw_layer,
+        mosaic::{Grid, Mosaic, capture_area, local_transform, premultiply},
+    },
 };
 use png::{BitDepth, ColorType, Compression, Encoder, EncodingError, Filter};
 use std::{error::Error, fmt, io::Write};
@@ -70,6 +75,13 @@ pub fn encode_png(image: &RgbaImage, crop: Option<PixelRect>) -> Result<Vec<u8>,
         PixelRect::new(0, 0, image.width(), image.height()).expect("nonempty image")
     });
     let rows = image.rows(rect).map_err(ExportError::Image)?;
+    encode_rows(rect, rows)
+}
+
+fn encode_rows<'a>(
+    rect: PixelRect,
+    rows: impl Iterator<Item = &'a [u8]>,
+) -> Result<Vec<u8>, ExportError> {
     let mut bytes = Vec::new();
     let mut encoder = Encoder::new(&mut bytes, rect.width(), rect.height());
     encoder.set_color(ColorType::Rgba);
@@ -86,6 +98,90 @@ pub fn encode_png(image: &RgbaImage, crop: Option<PixelRect>) -> Result<Vec<u8>,
     stream.finish().map_err(ExportError::Png)?;
     writer.finish().map_err(ExportError::Png)?;
     Ok(bytes)
+}
+
+// A later mosaic can depend on whole blocks from an earlier one outside the crop.
+fn required_blocks(
+    image: &RgbaImage,
+    doc: &Document,
+    crop: PixelRect,
+) -> (PixelRect, Vec<Option<Grid>>) {
+    let mut area = crop;
+    let mut grids: Vec<_> = doc
+        .layers
+        .iter()
+        .rev()
+        .map(|shape| {
+            let grid = Grid::new(shape, image)?.reaching(area)?;
+            area = area.union(grid.rect);
+            Some(grid)
+        })
+        .collect();
+    grids.reverse();
+    (area, grids)
+}
+
+/// Flatten the document in capture coordinates and encode only the requested rows.
+pub fn encode_annotated_png(
+    image: &RgbaImage,
+    doc: &Document,
+    crop: Option<PixelRect>,
+) -> Result<Vec<u8>, ExportError> {
+    if doc.layers.is_empty() {
+        return encode_png(image, crop);
+    }
+    let crop = crop.unwrap_or_else(|| PixelRect::new(0, 0, image.width(), image.height()).unwrap());
+    let source_rows = image.rows(crop).map_err(ExportError::Image)?;
+    let (area, grids) = required_blocks(image, doc, crop);
+    let mut target =
+        capture_area(image, area).ok_or(ExportError::Image(ImageError::InvalidDimensions))?;
+    let ts = local_transform(area);
+    let mut count = 0;
+    for (shape, grid) in doc.layers.iter().zip(&grids) {
+        let mosaic = grid.map(|grid| {
+            Mosaic::sample(grid, |x, y| {
+                target.pixel(x - area.left(), y - area.top()).unwrap()
+            })
+        });
+        draw_layer(&mut target.as_mut(), ts, shape, &mut count, mosaic.as_ref());
+    }
+    let stride = area.width() as usize * 4;
+    let left = (crop.left() - area.left()) as usize * 4;
+    let right = left + crop.width() as usize * 4;
+    let mut data = target.take();
+    let rows = data
+        .chunks_exact_mut(stride)
+        .skip((crop.top() - area.top()) as usize)
+        .zip(source_rows)
+        .zip(crop.top()..crop.bottom())
+        .map(|((row, src), y)| {
+            let row = &mut row[left..right];
+            for ((out, original), x) in row
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<4>().0)
+                .zip(crop.left()..crop.right())
+            {
+                if out[3] == 255 {
+                    continue;
+                }
+                let in_mosaic = grids.iter().flatten().any(|g| {
+                    (g.rect.top()..g.rect.bottom()).contains(&y)
+                        && (g.rect.left()..g.rect.right()).contains(&x)
+                });
+                let [r, g, b, a] = *out;
+                let composed = tiny_skia::PremultipliedColorU8::from_rgba(r, g, b, a).unwrap();
+                if !in_mosaic && composed == premultiply(original) {
+                    *out = *original;
+                } else {
+                    let c = composed.demultiply();
+                    *out = [c.red(), c.green(), c.blue(), c.alpha()];
+                }
+            }
+            &row[..]
+        });
+    encode_rows(crop, rows)
 }
 
 #[cfg(test)]
@@ -117,6 +213,32 @@ mod tests {
             assert_eq!(decoded, expected.pixels());
         }
     }
+    #[test]
+    fn export_composes_only_the_mosaic_blocks_reaching_the_crop() {
+        use crate::{
+            annotation::{Annotation, Style, Tool},
+            geometry::PixelPoint,
+        };
+        let image = RgbaImage::new(400, 400, vec![0; 400 * 400 * 4]).unwrap();
+        let mut patch = Annotation::start(
+            Tool::Pixelate,
+            Style::default(),
+            1.,
+            PixelPoint { x: 200, y: 100 },
+        );
+        patch.extend(PixelPoint { x: 390, y: 390 });
+        let doc = Document {
+            layers: vec![patch],
+        };
+        let crop = PixelRect::new(2, 2, 8, 8).unwrap();
+        assert_eq!(required_blocks(&image, &doc, crop).0, crop);
+        let crop = PixelRect::new(202, 102, 205, 105).unwrap();
+        assert_eq!(
+            required_blocks(&image, &doc, crop).0,
+            PixelRect::new(200, 100, 212, 112).unwrap()
+        );
+    }
+
     #[test]
     fn decodes_greyscale_and_rejects_invalid_png() {
         let mut bytes = Vec::new();

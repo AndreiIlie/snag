@@ -4,7 +4,8 @@ use tiny_skia::{Color, ColorU8, Pixmap, PixmapMut};
 
 /// Holds at most one resampled capture for the lifetime of the frozen image.
 pub struct Backdrop<'a> {
-    image: &'a RgbaImage,
+    pub(super) image: &'a RgbaImage,
+    pub(super) mosaics: super::mosaic::MosaicCache,
     scaled: Option<Pixmap>,
 }
 
@@ -13,6 +14,7 @@ impl<'a> Backdrop<'a> {
         Self {
             image,
             scaled: None,
+            mosaics: Default::default(),
         }
     }
 
