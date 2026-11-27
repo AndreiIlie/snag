@@ -87,11 +87,7 @@ impl Config {
     fn parse_with_home(text: &str, home: Option<&Path>) -> Result<Self, toml::de::Error> {
         let mut config: Self = toml::from_str(text)?;
         if let Some(dir) = &mut config.save.directory {
-            let bytes = dir.as_os_str().as_encoded_bytes();
-            if bytes.contains(&0) {
-                return Err(toml::de::Error::custom("save.directory contains NUL"));
-            }
-            if bytes.starts_with(b"~/") {
+            if dir.as_os_str().as_encoded_bytes().starts_with(b"~/") {
                 let home = home.filter(|path| path.is_absolute()).ok_or_else(|| {
                     toml::de::Error::custom(
                         "save.directory starts with ~/ but HOME is not absolute",

@@ -35,8 +35,8 @@ impl TryFrom<String> for FilenameTemplate {
     type Error = String;
 
     fn try_from(template: String) -> Result<Self, Self::Error> {
-        if template.is_empty() || template.contains(['/', '\0']) {
-            return Err("save.filename must be a nonempty filename without slashes or NUL".into());
+        if template.is_empty() || template.contains('/') {
+            return Err("save.filename must be a nonempty filename without slashes".into());
         }
         let mut parts = Vec::new();
         let mut literal = String::new();
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_names_and_tokens() {
-        for invalid in ["", "bad/name", "%y", "%", "a\0b"] {
+        for invalid in ["", "bad/name", "%y", "%"] {
             assert!(
                 FilenameTemplate::try_from(invalid.to_owned()).is_err(),
                 "{invalid}"
