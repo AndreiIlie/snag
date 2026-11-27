@@ -10,7 +10,7 @@ impl Overlay {
     }
 
     pub(super) fn start_text(&mut self, anchor: PixelPoint) {
-        let units = self.scale.get() / self.view.scale;
+        let units = self.capture_pixels(1.);
         let size = self.style.width.text_size() * units as f32;
         let fonts = self.fonts.as_mut().unwrap();
         let mut draft = Annotation::start(Tool::Text, self.style, units, anchor);
