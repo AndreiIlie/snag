@@ -1,0 +1,10 @@
+[package]
+name = "snag-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+png.workspace = true
+serde.workspace = true
+tiny-skia.workspace = true
+toml.workspace = true
