@@ -1,5 +1,6 @@
 use crate::{
     cli::{Command, Destination},
+    clock::Clock,
     run::{Choice, OverlayWindow, RunError, SaveDialog, run},
 };
 use snag_core::{
@@ -14,7 +15,7 @@ use snag_core::{
 };
 use std::{
     env, fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process,
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -27,7 +28,11 @@ impl OverlayWindow for Unused {
     }
 }
 impl SaveDialog for Unused {
-    fn path(self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    fn path(
+        self,
+        _: Option<&Path>,
+        _: &str,
+    ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         panic!("unexpected save dialog")
     }
 }
@@ -44,7 +49,11 @@ fn choice(action: Action, crop: Option<PixelRect>) -> Choice {
     }
 }
 impl SaveDialog for Option<PathBuf> {
-    fn path(self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    fn path(
+        self,
+        _: Option<&Path>,
+        _: &str,
+    ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
         Ok(self)
     }
 }
@@ -130,7 +139,7 @@ fn saves_and_copies_the_same_png_and_honors_delay_precedence() {
         &mut clipboard,
         Unused,
         Unused,
-        |d| sleeps.push(d),
+        Clock::system(|d| sleeps.push(d)),
     )
     .unwrap();
     assert_eq!(fs::read(&output).unwrap(), expected);
@@ -144,7 +153,7 @@ fn saves_and_copies_the_same_png_and_honors_delay_precedence() {
         &mut clipboard,
         Unused,
         Unused,
-        |d| sleeps.push(d),
+        Clock::system(|d| sleeps.push(d)),
     )
     .unwrap();
     assert_eq!(clipboard.png(), Some(expected.as_slice()));
@@ -169,7 +178,7 @@ fn capture_failure_preserves_destinations_and_skips_the_overlay() {
         &mut clipboard,
         Unused,
         Unused,
-        |_| {},
+        Clock::system(|_| {}),
     )
     .unwrap_err();
     assert!(error.to_string().contains("capture denied"));
@@ -183,7 +192,7 @@ fn capture_failure_preserves_destinations_and_skips_the_overlay() {
             &mut clipboard,
             Unused,
             Unused,
-            |_| {}
+            Clock::system(|_| {})
         ),
         Err(RunError::Capture(_))
     ));
@@ -207,7 +216,7 @@ fn attempts_both_destinations_and_reports_each_failure() {
             clipboard,
             Unused,
             Unused,
-            |_| {},
+            Clock::system(|_| {}),
         )
         .unwrap_err()
         .to_string()
@@ -241,7 +250,7 @@ fn gui_copy_encodes_the_selected_capture_pixels_and_honors_delay() {
             &mut clipboard,
             choice(Action::Copy, crop),
             Unused,
-            |d| slept = Some(d),
+            Clock::system(|d| slept = Some(d)),
         )
         .unwrap();
         assert_eq!(slept, Some(Duration::from_millis(wait)));
@@ -275,7 +284,7 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         &mut clipboard,
         save(),
         Some(file.clone()),
-        |_| {},
+        Clock::system(|_| {}),
     )
     .unwrap();
     assert_eq!(fs::read(&file).unwrap(), png);
@@ -288,7 +297,7 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         &mut clipboard,
         save(),
         Unused,
-        |_| {},
+        Clock::system(|_| {}),
     )
     .unwrap();
     assert_eq!(fs::read(&file).unwrap(), png);
@@ -302,11 +311,80 @@ fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
         &mut clipboard,
         save(),
         Unused,
-        |_| {},
+        Clock::system(|_| {}),
     )
     .unwrap_err()
     .to_string();
     assert!(error.contains(missing.to_str().unwrap()) && error.contains("lost clipboard"));
+}
+
+struct PresetDialog;
+impl SaveDialog for PresetDialog {
+    fn path(
+        self,
+        directory: Option<&Path>,
+        name: &str,
+    ) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+        assert_eq!(directory, Some(Path::new("/pictures")));
+        assert_eq!(name, "shot-2026-04.png");
+        Ok(None)
+    }
+}
+
+#[test]
+fn save_dialog_receives_configured_folder_and_name_at_capture_time() {
+    use std::time::UNIX_EPOCH;
+    let clock = Clock {
+        sleep: |_| {},
+        now: || UNIX_EPOCH,
+        local_time: |instant| {
+            assert_eq!(instant, UNIX_EPOCH);
+            Ok(snag_core::filename::LocalTime {
+                year: 2026,
+                month: 4,
+                day: 5,
+                hour: 6,
+                minute: 7,
+                second: 8,
+            })
+        },
+    };
+    let result = run(
+        Command::parse_from(["snag"]).unwrap(),
+        &Config::parse("[save]\ndirectory = '/pictures'\nfilename = 'shot-%Y-%m'").unwrap(),
+        &mut FakeCapture::new(Ok(screenshot())),
+        &mut MemoryClipboard::default(),
+        choice(Action::Save, None),
+        PresetDialog,
+        clock,
+    );
+    assert!(matches!(result, Err(RunError::Cancelled)));
+}
+
+#[test]
+fn failed_local_time_conversion_still_delivers_requested_copy() {
+    let mut clock = Clock::system(|_| {});
+    clock.local_time = |_| Err(io::Error::other("unavailable"));
+    let mut clipboard = MemoryClipboard::default();
+    let result = run(
+        Command::parse_from(["snag", "--copy"]).unwrap(),
+        &Config::default(),
+        &mut FakeCapture::new(Ok(screenshot())),
+        &mut clipboard,
+        choice(Action::Save, None),
+        Unused,
+        clock,
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("local capture time")
+    );
+    assert_eq!(
+        clipboard.png(),
+        Some(encode_png(&screenshot().image, None).unwrap().as_slice())
+    );
 }
 
 #[test]
@@ -329,7 +407,7 @@ fn cancelling_the_overlay_or_dialog_preserves_destinations() {
             &mut clipboard,
             choice(action, None),
             None,
-            |_| {},
+            Clock::system(|_| {}),
         )
         .unwrap_err();
         assert!(matches!(error, RunError::Cancelled));
@@ -444,7 +522,7 @@ fn gui_copy_and_save_deliver_the_drawn_annotation_in_the_crop() {
                 annotations: doc.clone(),
             },
             Unused,
-            |_| {},
+            Clock::system(|_| {}),
         )
         .unwrap();
         let bytes = match action {

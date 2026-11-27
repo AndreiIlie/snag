@@ -1,4 +1,5 @@
 use crate::cli::{Command, Destination};
+use crate::clock::Clock;
 use snag_core::{
     annotation::Document,
     config::Config,
@@ -7,7 +8,12 @@ use snag_core::{
     platform::{CaptureError, ClipboardBackend, ClipboardError, ScreenCapture, Screenshot},
     toolbar::Action,
 };
-use std::{error::Error, fmt, fs, path::PathBuf, time::Duration};
+use std::{
+    error::Error,
+    fmt, fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 pub struct Choice {
     pub action: Action,
@@ -20,7 +26,7 @@ pub trait OverlayWindow {
 }
 
 pub trait SaveDialog {
-    fn path(self) -> Result<Option<PathBuf>, Box<dyn Error>>;
+    fn path(self, directory: Option<&Path>, name: &str) -> Result<Option<PathBuf>, Box<dyn Error>>;
 }
 
 #[derive(Debug)]
@@ -67,7 +73,7 @@ pub fn run(
     clipboard: &mut impl ClipboardBackend,
     overlay: impl OverlayWindow,
     dialog: impl SaveDialog,
-    sleep: impl FnOnce(Duration),
+    clock: Clock<impl FnOnce(Duration)>,
 ) -> Result<(), RunError> {
     let delay = match command {
         Command::Full { delay_ms, .. } | Command::Gui { delay_ms, .. } => {
@@ -76,9 +82,10 @@ pub fn run(
         Command::ServeClipboard => unreachable!("helper mode is dispatched before capture"),
     };
     if delay > 0 {
-        sleep(Duration::from_millis(delay));
+        (clock.sleep)(Duration::from_millis(delay));
     }
     let shot = capture.capture().map_err(RunError::Capture)?;
+    let captured_at = (clock.now)();
     let (crop, annotations, file, copy) = match command {
         Command::Full { destination, .. } => match destination {
             Destination::File { path, copy } => (None, Document::default(), Ok(Some(path)), copy),
@@ -96,11 +103,16 @@ pub fn run(
                 Action::Save => {
                     let path = match output {
                         Some(path) => Ok(Some(path)),
-                        None => match dialog.path() {
+                        None => match (clock.local_time)(captured_at)
+                            .map_err(|e| format!("could not read local capture time: {e}"))
+                            .and_then(|time| {
+                                let name = config.save.filename.render(&time);
+                                dialog
+                                    .path(config.save.directory.as_deref(), &name)
+                                    .map_err(|e| format!("could not select a file to save: {e}"))
+                            }) {
                             Ok(None) => return Err(RunError::Cancelled),
-                            result => {
-                                result.map_err(|e| format!("could not select a file to save: {e}"))
-                            }
+                            result => result,
                         },
                     };
                     (crop, annotations, path, copy)

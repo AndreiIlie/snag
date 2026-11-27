@@ -1,6 +1,7 @@
 mod capture;
 mod cli;
 mod clipboard;
+mod clock;
 mod file_uri;
 mod overlay;
 mod run;
@@ -27,7 +28,7 @@ fn execute(command: Command) -> Result<(), Box<dyn Error>> {
         },
         overlay::FullscreenOverlay,
         save_dialog::Portal,
-        thread::sleep,
+        clock::Clock::system(thread::sleep),
     )?;
     Ok(())
 }

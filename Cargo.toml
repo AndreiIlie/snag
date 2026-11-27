@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+libc = "0.2"
 clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 fontdb = { version = "0.23", default-features = false, features = ["fontconfig", "memmap"] }
 ttf-parser = "0.25"
@@ -24,3 +25,8 @@ percent-encoding = "2"
 bytemuck = "1"
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland"] }
 softbuffer = { version = "0.4.8", default-features = false, features = ["x11", "wayland", "x11-dlopen", "wayland-dlopen"] }
+
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
