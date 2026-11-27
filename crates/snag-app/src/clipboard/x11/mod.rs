@@ -1,6 +1,8 @@
 mod transfers;
 
 use super::{Owner, Png, Result};
+use rustix::event::{PollFd, PollFlags, poll};
+use std::time::Instant;
 use transfers::{Property as TransferKey, Transfers, convert_pairs};
 use x11rb::{
     CURRENT_TIME, NONE,
@@ -144,7 +146,7 @@ impl X11Owner {
                         &[u32::try_from(self.png.len()).unwrap_or(u32::MAX)],
                     )?
                     .check()?;
-                self.transfers.start(key);
+                self.transfers.start(key, Instant::now());
             } else {
                 self.conn
                     .change_property8(PropMode::REPLACE, requestor, property, atoms.PNG, &self.png)?
@@ -228,7 +230,7 @@ impl X11Owner {
     }
 
     fn send_chunk(&mut self, key: TransferKey) -> std::result::Result<(), ReplyError> {
-        let Some(range) = self.transfers.next(key) else {
+        let Some(range) = self.transfers.chunk(key) else {
             return Ok(());
         };
         let result = self
@@ -238,28 +240,63 @@ impl X11Owner {
                 key.0,
                 key.1,
                 self.atoms.PNG,
-                &self.png[range],
+                &self.png[range.clone()],
             )?
             .check();
-        if !client_result(result.map(|()| true))? {
+        if client_result(result.map(|()| true))? {
+            self.transfers.sent(key, range, Instant::now());
+        } else {
             self.transfers.cancel(key);
         }
-        if !self.transfers.watching(key.0) {
+        self.unwatch_if_idle(key.0)
+    }
+
+    fn unwatch_if_idle(&self, window: Window) -> std::result::Result<(), ReplyError> {
+        if !self.transfers.watching(window) {
             self.conn
                 .change_window_attributes(
-                    key.0,
+                    window,
                     &ChangeWindowAttributesAux::new().event_mask(EventMask::NO_EVENT),
                 )?
                 .check()?;
         }
         Ok(())
     }
+
+    fn event_before(&self, deadline: Instant) -> Result<Option<Event>> {
+        if let Some(event) = self.conn.poll_for_event()? {
+            return Ok(Some(event));
+        }
+        let mut fds = [PollFd::new(self.conn.stream(), PollFlags::IN)];
+        let timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .try_into()?;
+        match poll(&mut fds, Some(&timeout)) {
+            Ok(_) | Err(rustix::io::Errno::INTR) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 impl Owner for X11Owner {
     fn wait_until_lost(mut self: Box<Self>) -> Result<()> {
         while self.transfers.serving() {
-            let result = match self.conn.wait_for_event()? {
+            let event = if let Some(deadline) = self.transfers.earliest_deadline() {
+                let now = Instant::now();
+                if deadline <= now {
+                    for window in self.transfers.expire(now) {
+                        client_result(self.unwatch_if_idle(window).map(|()| true))?;
+                    }
+                    continue;
+                }
+                let Some(event) = self.event_before(deadline)? else {
+                    continue;
+                };
+                event
+            } else {
+                self.conn.wait_for_event()?
+            };
+            let result = match event {
                 Event::SelectionRequest(req) => self.request(req),
                 Event::SelectionClear(clear)
                     if clear.owner == self.window && clear.selection == self.atoms.CLIPBOARD =>
