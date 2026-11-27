@@ -83,7 +83,7 @@ fn resample(image: &RgbaImage, (width, height): (u32, u32)) -> Result<Pixmap, Re
         .enumerate()
     {
         let (y0, y1, fy) = sample_axis(y as u32, image.height(), height);
-        for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
+        for (x, pixel) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let (x0, x1, fx) = sample_axis(x as u32, image.width(), width);
             let (tl, tr, bl, br) = (read(x0, y0), read(x1, y0), read(x0, y1), read(x1, y1));
             for c in 0..4 {

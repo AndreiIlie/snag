@@ -124,11 +124,11 @@ impl Overlay {
             Drag::Resize(s, handle) => {
                 let anchor = s.handle_position(handle);
                 // Keep the grab offset until the pointer reaches the edge of the image.
-                let edge = |pos: i64, offset: i64, delta: i64, limit: u32| {
-                    if pos <= 0 || pos >= i64::from(limit) {
+                let edge = |pos: i64, origin: i64, delta: i64, limit: u32| {
+                    if delta != 0 && (pos <= 0 || pos >= i64::from(limit)) {
                         pos
                     } else {
-                        offset.saturating_add(delta)
+                        origin.saturating_add(delta)
                     }
                 };
                 s.resized(
@@ -239,6 +239,14 @@ mod tests {
         assert_eq!(overlay.crop(), PixelRect::new(0, 0, 1910, 1060));
         drag(&mut overlay, at(1910, 1060), at(1919, 1079));
         assert_eq!(overlay.crop(), PixelRect::new(0, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn pressing_a_handle_near_the_screen_edge_keeps_its_grab_offset() {
+        let mut overlay = canvas();
+        drag(&mut overlay, at(3, 4), at(220, 180));
+        drag(&mut overlay, at(0, 0), at(0, 0));
+        assert_eq!(overlay.crop(), PixelRect::new(3, 4, 220, 180));
     }
 
     #[test]
