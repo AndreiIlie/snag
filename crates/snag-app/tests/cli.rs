@@ -22,10 +22,12 @@ fn reports_unavailable_overlay_and_capture() {
     for (args, message) in [
         (&[][..], "interactive overlay"),
         (&["gui"][..], "interactive overlay"),
-        (&["full", "--copy"][..], "no screen capture backend"),
+        (&["full", "--copy"][..], "WAYLAND_DISPLAY and DISPLAY"),
     ] {
         let result = Command::new(env!("CARGO_BIN_EXE_snag"))
             .args(args)
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("DISPLAY")
             .env("XDG_CONFIG_HOME", &config)
             .output()
             .unwrap();

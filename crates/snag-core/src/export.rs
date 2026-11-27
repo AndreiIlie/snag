@@ -8,6 +8,7 @@ use std::{error::Error, fmt, io::Write};
 #[derive(Debug)]
 pub enum ExportError {
     Image(ImageError),
+    Decode(png::DecodingError),
     Png(EncodingError),
 }
 
@@ -15,6 +16,7 @@ impl fmt::Display for ExportError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Image(e) => e.fmt(f),
+            Self::Decode(e) => write!(f, "could not decode PNG: {e}"),
             Self::Png(e) => write!(f, "could not encode PNG: {e}"),
         }
     }
@@ -23,9 +25,43 @@ impl Error for ExportError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Image(e) => Some(e),
+            Self::Decode(e) => Some(e),
             Self::Png(e) => Some(e),
         }
     }
+}
+
+/// Decode the first PNG frame to straight-alpha RGBA8.
+pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, ExportError> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(
+        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
+    );
+    let mut reader = decoder.read_info().map_err(ExportError::Decode)?;
+    let size = reader
+        .output_buffer_size()
+        .ok_or(ExportError::Image(ImageError::InvalidDimensions))?;
+    let mut pixels = vec![0; size];
+    let frame = reader
+        .next_frame(&mut pixels)
+        .map_err(ExportError::Decode)?;
+    reader.finish().map_err(ExportError::Decode)?;
+    pixels.truncate(frame.buffer_size());
+    if frame.color_type == ColorType::GrayscaleAlpha {
+        let count = pixels.len() / 2;
+        pixels.resize(
+            count
+                .checked_mul(4)
+                .ok_or(ExportError::Image(ImageError::InvalidDimensions))?,
+            0,
+        );
+        for i in (0..count).rev() {
+            let gray = pixels[2 * i];
+            let alpha = pixels[2 * i + 1];
+            pixels[4 * i..4 * i + 4].copy_from_slice(&[gray, gray, gray, alpha]);
+        }
+    }
+    RgbaImage::new(frame.width, frame.height, pixels).map_err(ExportError::Image)
 }
 
 /// Encode straight-alpha source rows. A crop uses the same row iterator as image cropping.
@@ -68,6 +104,7 @@ mod tests {
                 .unwrap_or_else(|| image.clone());
             let png = encode_png(&image, crop).unwrap();
             assert_eq!(png, encode_png(&image, crop).unwrap());
+            assert_eq!(decode_png(&png).unwrap(), expected);
             let mut reader = png::Decoder::new(Cursor::new(png)).read_info().unwrap();
             let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
             let info = reader.next_frame(&mut decoded).unwrap();
@@ -79,5 +116,20 @@ mod tests {
             assert_eq!(info.bit_depth, BitDepth::Eight);
             assert_eq!(decoded, expected.pixels());
         }
+    }
+    #[test]
+    fn decodes_greyscale_and_rejects_invalid_png() {
+        let mut bytes = Vec::new();
+        let mut encoder = Encoder::new(&mut bytes, 2, 1);
+        encoder.set_color(ColorType::Grayscale);
+        encoder.set_depth(BitDepth::Sixteen);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[32, 0, 210, 0]).unwrap();
+        writer.finish().unwrap();
+        assert_eq!(
+            decode_png(&bytes).unwrap().pixels(),
+            &[32, 32, 32, 255, 210, 210, 210, 255]
+        );
+        assert!(decode_png(b"invalid").is_err());
     }
 }

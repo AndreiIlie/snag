@@ -1,24 +1,18 @@
+mod capture;
 mod cli;
 mod run;
+mod session;
 #[cfg(test)]
 mod tests;
 
 use cli::Command;
 use snag_core::{
     config::{Config, config_path},
-    platform::{CaptureError, ClipboardBackend, ClipboardError, ScreenCapture, Screenshot},
+    platform::{ClipboardBackend, ClipboardError},
 };
 use std::{env, error::Error, process::ExitCode, thread};
 
 struct UnavailableBackend;
-
-impl ScreenCapture for UnavailableBackend {
-    fn capture(&mut self) -> Result<Screenshot, CaptureError> {
-        Err(CaptureError(
-            "no screen capture backend in this build".into(),
-        ))
-    }
-}
 
 impl ClipboardBackend for UnavailableBackend {
     fn set_png(&mut self, _: &[u8]) -> Result<(), ClipboardError> {
@@ -31,7 +25,7 @@ fn execute(command: Command) -> Result<(), Box<dyn Error>> {
     run::run(
         command,
         &config,
-        &mut UnavailableBackend,
+        &mut capture::Capture::from(session::Session::current()),
         &mut UnavailableBackend,
         thread::sleep,
     )?;
