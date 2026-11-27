@@ -1,7 +1,9 @@
 use crate::{
+    annotation::{Annotation, Document, Edit, Style, Tool},
     geometry::{PixelPoint, PixelRect, Point, ScaleFactor},
+    history::History,
     selection::{Handle, Hit, Selection},
-    toolbar::{Action, Toolbar},
+    toolbar::{Action, Button, Toolbar},
     view::View,
 };
 
@@ -17,6 +19,8 @@ pub enum Cursor {
 enum Drag {
     New(Option<Selection>),
     Move(Selection),
+    Draw,
+    Annotation { index: usize, origin: PixelPoint },
     Resize(Selection, Handle),
 }
 
@@ -26,7 +30,13 @@ pub struct Overlay {
     selection: Option<Selection>,
     pointer: Option<Point>,
     drag: Option<(PixelPoint, Drag)>,
-    pressed_button: Option<Action>,
+    pressed_button: Option<Button>,
+    tool: Option<Tool>,
+    style: Style,
+    document: Document,
+    history: History<Document>,
+    draft: Option<Annotation>,
+    selected: Option<usize>,
 }
 
 impl Overlay {
@@ -38,6 +48,12 @@ impl Overlay {
             pointer: None,
             drag: None,
             pressed_button: None,
+            tool: None,
+            style: Style::default(),
+            document: Document::default(),
+            history: History::default(),
+            draft: None,
+            selected: None,
         }
     }
 
@@ -75,34 +91,70 @@ impl Overlay {
         )
     }
 
+    pub fn into_document(self) -> Document {
+        self.document
+    }
+
+    pub(crate) fn layers(&self) -> impl Iterator<Item = &Annotation> {
+        self.document
+            .layers
+            .iter()
+            .chain(self.draft.iter().filter(|a| a.drawable()))
+    }
+    pub(crate) fn selected(&self) -> Option<&Annotation> {
+        self.selected.map(|i| &self.document.layers[i])
+    }
+    pub(crate) fn active(&self, button: Button) -> bool {
+        match button {
+            Button::Tool(tool) => self.tool == Some(tool),
+            Button::Colour(colour) => self.style.colour == colour,
+            Button::Width(width) => self.style.width == width,
+            _ => false,
+        }
+    }
+    fn annotation_at(&self, point: PixelPoint) -> Option<usize> {
+        if !self.on_capture() {
+            return None;
+        }
+        self.document
+            .hit(point, 3. * self.scale.get() / self.view.scale)
+    }
+    fn on_capture(&self) -> bool {
+        let b = self.view.bounds;
+        self.pointer.is_some_and(|p| {
+            (f64::from(b.left())..f64::from(b.right())).contains(&p.x)
+                && (f64::from(b.top())..f64::from(b.bottom())).contains(&p.y)
+        })
+    }
     fn hit(&self, point: PixelPoint) -> Hit {
         let scale = ScaleFactor::new(self.scale.get() / self.view.scale).unwrap_or(self.scale);
         self.selection
             .map_or(Hit::Outside, |s| s.hit_test(point, scale))
     }
 
-    fn button_at_pointer(&self) -> Option<Action> {
+    fn button_at_pointer(&self) -> Option<Button> {
         self.toolbar()?.hit(self.pointer?)
     }
 
     pub fn cursor(&self) -> Cursor {
         if let Some((_, drag)) = self.drag {
             return match drag {
-                Drag::New(_) => Cursor::Crosshair,
-                Drag::Move(_) => Cursor::Move,
+                Drag::New(_) | Drag::Draw => Cursor::Crosshair,
+                Drag::Move(_) | Drag::Annotation { .. } => Cursor::Move,
                 Drag::Resize(_, handle) => Cursor::Resize(handle),
             };
         }
         if self.button_at_pointer().is_some() {
             return Cursor::Arrow;
         }
-        match self
-            .pointer
-            .and_then(|p| self.view.capture_point(p))
-            .map(|p| self.hit(p))
-        {
-            Some(Hit::Handle(h)) => Cursor::Resize(h),
-            Some(Hit::Inside) => Cursor::Move,
+        let Some(point) = self.pointer.and_then(|p| self.view.capture_point(p)) else {
+            return Cursor::Crosshair;
+        };
+        match self.hit(point) {
+            Hit::Handle(h) => Cursor::Resize(h),
+            _ if self.tool.is_some() => Cursor::Crosshair,
+            Hit::Inside => Cursor::Move,
+            _ if self.annotation_at(point).is_some() => Cursor::Move,
             _ => Cursor::Crosshair,
         }
     }
@@ -121,6 +173,12 @@ impl Overlay {
         let dx = point.x.saturating_sub(start.x);
         let dy = point.y.saturating_sub(start.y);
         let next = match drag {
+            Drag::Draw => return self.draft.as_mut().unwrap().extend(point),
+            Drag::Annotation { index, origin } => {
+                let offset = origin.plus(PixelPoint { x: dx, y: dy });
+                let shape = &mut self.document.layers[index];
+                return std::mem::replace(&mut shape.offset, offset) != offset;
+            }
             Drag::New(old) => Selection::from_drag(start, point, width, height).or(old),
             Drag::Move(s) => Some(s.moved(dx, dy)),
             Drag::Resize(s, handle) => {
@@ -158,20 +216,125 @@ impl Overlay {
         }
         let drag = match (self.selection, self.hit(point)) {
             (Some(s), Hit::Handle(h)) => Drag::Resize(s, h),
+            _ if self.tool.is_some() => {
+                if !self.on_capture() {
+                    return false;
+                }
+                self.draft = Some(Annotation::start(
+                    self.tool.unwrap(),
+                    self.style,
+                    self.scale.get() / self.view.scale,
+                    point,
+                ));
+                Drag::Draw
+            }
+            _ if let Some(index) = self.annotation_at(point) => {
+                self.selected = Some(index);
+                Drag::Annotation {
+                    index,
+                    origin: self.document.layers[index].offset,
+                }
+            }
             (Some(s), Hit::Inside) => Drag::Move(s),
             (old, _) => Drag::New(old),
         };
+        if !matches!(drag, Drag::Annotation { .. }) {
+            self.selected = None;
+        }
         self.drag = Some((point, drag));
         self.selection.is_some()
     }
 
     pub fn release(&mut self) -> (bool, Option<Action>) {
-        let redraw = self.drag.take().is_some() && self.selection.is_some();
-        let action = self
+        let redraw = self.drag.is_some() && self.selection.is_some();
+        match self.drag.take().map(|(_, d)| d) {
+            Some(Drag::Draw) => {
+                if let Some(shape) = self.draft.take().filter(Annotation::drawable) {
+                    self.history
+                        .execute(Edit::Add(Some(shape)), &mut self.document);
+                }
+            }
+            Some(Drag::Annotation { index, origin }) => {
+                let to = self.document.layers[index].offset;
+                if origin != to {
+                    self.history.execute(
+                        Edit::Move {
+                            index,
+                            from: origin,
+                            to,
+                        },
+                        &mut self.document,
+                    );
+                }
+            }
+            _ => {}
+        }
+        if let Some(button) = self
             .pressed_button
             .take()
-            .filter(|a| Some(*a) == self.button_at_pointer());
-        (redraw, action)
+            .filter(|b| Some(*b) == self.button_at_pointer())
+        {
+            return self.activate(button);
+        }
+        (redraw, None)
+    }
+    fn activate(&mut self, button: Button) -> (bool, Option<Action>) {
+        match button {
+            Button::Close(action) => return (false, Some(action)),
+            Button::Tool(tool) => {
+                if self.selection.is_none() {
+                    return (false, None);
+                }
+                self.tool = (self.tool != Some(tool)).then_some(tool);
+                self.selected = None;
+            }
+            Button::Undo => {
+                self.history.undo(&mut self.document);
+                self.selected = None;
+            }
+            Button::Redo => {
+                self.history.redo(&mut self.document);
+                self.selected = None;
+            }
+            Button::Colour(c) => self.style.colour = c,
+            Button::Width(w) => self.style.width = w,
+        }
+        (true, None)
+    }
+    pub fn key(&mut self, key: Key) -> (bool, Option<Action>) {
+        match key {
+            Key::Escape => (false, Some(Action::Cancel)),
+            Key::Enter | Key::Copy | Key::Save => {
+                if self.drag.is_some() {
+                    self.release();
+                }
+                (
+                    false,
+                    Some(if key == Key::Save {
+                        Action::Save
+                    } else {
+                        Action::Copy
+                    }),
+                )
+            }
+            _ if self.drag.is_some() => (false, None),
+            Key::Tool(tool) => self.activate(Button::Tool(tool)),
+            Key::Undo => self.activate(Button::Undo),
+            Key::Redo => self.activate(Button::Redo),
+            Key::Delete => {
+                let Some(index) = self.selected.take() else {
+                    return (false, None);
+                };
+                self.history.execute(
+                    Edit::Delete {
+                        index,
+                        removed: None,
+                    },
+                    &mut self.document,
+                );
+                (true, None)
+            }
+        }
     }
 
     pub fn pointer_left(&mut self) {
@@ -181,6 +344,10 @@ impl Overlay {
     pub fn reset_pointer(&mut self) -> bool {
         self.pointer_left();
         self.pressed_button = None;
+        self.draft = None;
+        if let Some((_, Drag::Annotation { index, origin })) = self.drag {
+            self.document.layers[index].offset = origin;
+        }
         self.drag.take().is_some() && self.selection.is_some()
     }
 }
@@ -192,16 +359,10 @@ pub enum Key {
     Escape,
     Copy,
     Save,
-}
-
-impl Key {
-    pub fn action(self) -> Action {
-        match self {
-            Self::Enter | Self::Copy => Action::Copy,
-            Self::Save => Action::Save,
-            Self::Escape => Action::Cancel,
-        }
-    }
+    Tool(Tool),
+    Undo,
+    Redo,
+    Delete,
 }
 
 #[cfg(test)]
@@ -314,7 +475,10 @@ mod tests {
     fn buttons_and_shortcuts_choose_actions() {
         let mut overlay = canvas();
         drag(&mut overlay, at(40, 40), at(300, 200));
-        for (action, rect) in overlay.toolbar().unwrap().buttons() {
+        for (button, rect) in overlay.toolbar().unwrap().buttons() {
+            let Button::Close(action) = button else {
+                continue;
+            };
             let point = at(rect.left() as i32 + 1, rect.top() as i32 + 1);
             overlay.pointer_moved(point);
             assert_eq!(overlay.cursor(), Cursor::Arrow);
@@ -326,7 +490,7 @@ mod tests {
             assert_eq!(overlay.release(), (false, Some(action)));
         }
         assert_eq!(
-            [Key::Enter, Key::Copy, Key::Save, Key::Escape].map(Key::action),
+            [Key::Enter, Key::Copy, Key::Save, Key::Escape].map(|k| overlay.key(k).1.unwrap()),
             [Action::Copy, Action::Copy, Action::Save, Action::Cancel]
         );
     }

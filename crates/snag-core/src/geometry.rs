@@ -26,6 +26,15 @@ pub struct PixelPoint {
     pub y: i64,
 }
 
+impl PixelPoint {
+    pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
+    pub(crate) fn plus(self, other: Self) -> Self {
+        Self {
+            x: self.x.saturating_add(other.x),
+            y: self.y.saturating_add(other.y),
+        }
+    }
+}
 impl Point {
     /// Snap a logical pointer position to image pixels, including positions outside the image.
     pub fn to_pixels(self, scale: ScaleFactor) -> Option<PixelPoint> {

@@ -1,3 +1,4 @@
+use crate::annotation::{Colour, Tool, Width};
 use crate::geometry::{PixelRect, Point, ScaleFactor};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6,7 +7,25 @@ pub enum Action {
     Save,
     Cancel,
 }
-const BUTTONS: [Action; 3] = [Action::Copy, Action::Save, Action::Cancel];
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Button {
+    Tool(Tool),
+    Undo,
+    Redo,
+    Colour(Colour),
+    Width(Width),
+    Close(Action),
+}
+
+fn groups() -> impl Iterator<Item = (usize, Button)> {
+    Tool::ALL
+        .into_iter()
+        .map(|x| (0, Button::Tool(x)))
+        .chain([(1, Button::Undo), (1, Button::Redo)])
+        .chain(Colour::ALL.into_iter().map(|x| (2, Button::Colour(x))))
+        .chain(Width::ALL.into_iter().map(|x| (3, Button::Width(x))))
+        .chain([Action::Copy, Action::Save, Action::Cancel].map(|x| (4, Button::Close(x))))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Toolbar {
@@ -19,18 +38,15 @@ pub struct Toolbar {
 impl Toolbar {
     pub fn place(region: PixelRect, window: (u32, u32), scale: ScaleFactor) -> Option<Self> {
         let (width, height) = window;
-        let count = BUTTONS.len() as u32;
+        let count = groups().count() as u32;
         if width < count || height == 0 {
             return None;
         }
         let px = |logical: f64| (logical * scale.get()).round().max(1.0) as u32;
-        let gap = px(4.0).min((width - count) / (count - 1));
-        let side = px(32.0)
-            .min((width - gap * (count - 1)) / count)
-            .min(height);
-        let left = region
-            .right()
-            .saturating_sub(count * side + (count - 1) * gap);
+        let spaces = count - 1 + 4;
+        let gap = px(4.0).min((width - count) / spaces);
+        let side = px(32.0).min((width - gap * spaces) / count).min(height);
+        let left = region.right().saturating_sub(count * side + spaces * gap);
         let below = region.bottom().saturating_add(gap);
         let top = if below <= height - side {
             below
@@ -47,16 +63,16 @@ impl Toolbar {
         })
     }
 
-    pub fn buttons(self) -> impl Iterator<Item = (Action, PixelRect)> {
-        BUTTONS.into_iter().enumerate().map(move |(i, action)| {
-            let left = self.left + i as u32 * (self.side + self.gap);
+    pub fn buttons(self) -> impl Iterator<Item = (Button, PixelRect)> {
+        groups().enumerate().map(move |(i, (group, action))| {
+            let left = self.left + i as u32 * (self.side + self.gap) + group as u32 * self.gap;
             let rect =
                 PixelRect::new(left, self.top, left + self.side, self.top + self.side).unwrap();
             (action, rect)
         })
     }
 
-    pub fn hit(self, point: Point) -> Option<Action> {
+    pub fn hit(self, point: Point) -> Option<Button> {
         self.buttons().find_map(|(action, rect)| {
             ((f64::from(rect.left())..f64::from(rect.right())).contains(&point.x)
                 && (f64::from(rect.top())..f64::from(rect.bottom())).contains(&point.y))
@@ -79,8 +95,8 @@ mod tests {
                 (200, 250, 200 - side - gap),
                 (0, 260, 260 - side - gap),
             ] {
-                let rect = PixelRect::new(1, top, 310, bottom).unwrap();
-                let bar = Toolbar::place(rect, (320, 260), scale).unwrap();
+                let rect = PixelRect::new(1, top, 1900, bottom).unwrap();
+                let bar = Toolbar::place(rect, (1920, 260), scale).unwrap();
                 assert_eq!(bar.top, expected);
                 for (action, button) in bar.buttons() {
                     assert_eq!((button.width(), button.height()), (side, side));
@@ -99,19 +115,19 @@ mod tests {
                         None
                     );
                 }
-                assert_eq!(bar.buttons().last().unwrap().1.right(), 310);
+                assert_eq!(bar.buttons().last().unwrap().1.right(), 1900);
             }
         }
         let bar = Toolbar::place(
             PixelRect::new(0, 0, 1, 1).unwrap(),
-            (12, 3),
+            (48, 3),
             ScaleFactor::ONE,
         )
         .unwrap();
         assert_eq!(bar.left, 0);
         assert!(
             bar.buttons()
-                .all(|(_, r)| r.right() <= 12 && r.bottom() <= 3)
+                .all(|(_, r)| r.right() <= 48 && r.bottom() <= 3)
         );
     }
 }
