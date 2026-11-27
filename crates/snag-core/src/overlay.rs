@@ -1,11 +1,15 @@
+mod text;
+
 use crate::{
     annotation::{Annotation, Document, Edit, Style, Tool},
+    font::Fonts,
     geometry::{PixelPoint, PixelRect, Point, ScaleFactor},
     history::History,
     selection::{Handle, Hit, Selection},
     toolbar::{Action, Button, Toolbar},
     view::View,
 };
+use std::cell::LazyCell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cursor {
@@ -36,6 +40,9 @@ pub struct Overlay {
     document: Document,
     history: History<Document>,
     draft: Option<Annotation>,
+    fonts: LazyCell<Option<Fonts>>,
+    // Byte offset at a character boundary in the text draft.
+    caret: usize,
     selected: Option<usize>,
 }
 
@@ -53,6 +60,8 @@ impl Overlay {
             document: Document::default(),
             history: History::default(),
             draft: None,
+            fonts: LazyCell::new(Fonts::system),
+            caret: 0,
             selected: None,
         }
     }
@@ -211,14 +220,27 @@ impl Overlay {
             return false;
         };
         self.pressed_button = self.button_at_pointer();
+        let finished = self.is_typing()
+            && !matches!(
+                self.pressed_button,
+                Some(Button::Width(_) | Button::Colour(_))
+            );
+        if finished {
+            self.finish_text();
+        }
         if self.pressed_button.is_some() || self.drag.is_some() {
-            return false;
+            return finished;
         }
         let drag = match (self.selection, self.hit(point)) {
             (Some(s), Hit::Handle(h)) => Drag::Resize(s, h),
             _ if self.tool.is_some() => {
                 if !self.on_capture() {
-                    return false;
+                    return finished;
+                }
+                if self.tool == Some(Tool::Text) {
+                    self.start_text(point);
+                    self.selected = None;
+                    return true;
                 }
                 self.draft = Some(Annotation::start(
                     self.tool.unwrap(),
@@ -285,6 +307,9 @@ impl Overlay {
                 if self.selection.is_none() {
                     return (false, None);
                 }
+                if tool == Tool::Text && self.fonts.is_none() {
+                    return (false, None);
+                }
                 self.tool = (self.tool != Some(tool)).then_some(tool);
                 self.selected = None;
             }
@@ -296,12 +321,25 @@ impl Overlay {
                 self.history.redo(&mut self.document);
                 self.selected = None;
             }
-            Button::Colour(c) => self.style.colour = c,
-            Button::Width(w) => self.style.width = w,
+            Button::Colour(c) => {
+                self.style.colour = c;
+                if self.is_typing() {
+                    self.draft.as_mut().unwrap().style.colour = c;
+                }
+            }
+            Button::Width(w) => {
+                self.style.width = w;
+                if self.is_typing() {
+                    self.resize_text(w);
+                }
+            }
         }
         (true, None)
     }
     pub fn key(&mut self, key: Key) -> (bool, Option<Action>) {
+        if let Some(changed) = self.typing_key(key) {
+            return (changed, None);
+        }
         match key {
             Key::Escape => (false, Some(Action::Cancel)),
             Key::Enter | Key::Copy | Key::Save => {
@@ -321,6 +359,9 @@ impl Overlay {
             Key::Tool(tool) => self.activate(Button::Tool(tool)),
             Key::Undo => self.activate(Button::Undo),
             Key::Redo => self.activate(Button::Redo),
+            Key::Character(_) | Key::Backspace | Key::Left | Key::Right | Key::Home | Key::End => {
+                (false, None)
+            }
             Key::Delete => {
                 let Some(index) = self.selected.take() else {
                     return (false, None);
@@ -344,7 +385,9 @@ impl Overlay {
     pub fn reset_pointer(&mut self) -> bool {
         self.pointer_left();
         self.pressed_button = None;
-        self.draft = None;
+        if !self.is_typing() {
+            self.draft = None;
+        }
         if let Some((_, Drag::Annotation { index, origin })) = self.drag {
             self.document.layers[index].offset = origin;
         }
@@ -363,6 +406,12 @@ pub enum Key {
     Undo,
     Redo,
     Delete,
+    Character(char),
+    Backspace,
+    Left,
+    Right,
+    Home,
+    End,
 }
 
 #[cfg(test)]

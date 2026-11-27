@@ -45,6 +45,25 @@ impl Annotation {
     }
     pub(crate) fn bounds(&self) -> [f64; 4] {
         let (a, b) = self.ends();
+        if let Some(text) = &self.text {
+            let line = &text.line;
+            let height = line.half_height;
+            let mut bounds = [0., -height, *line.carets.last().unwrap(), height];
+            if let Some(path) = &line.outline {
+                let ink = path.bounds();
+                bounds[0] = bounds[0].min(ink.left());
+                bounds[1] = bounds[1].min(ink.top());
+                bounds[2] = bounds[2].max(ink.right());
+                bounds[3] = bounds[3].max(ink.bottom());
+            }
+            let [l, t, r, bottom] = bounds.map(f64::from);
+            return [
+                a.x as f64 + l,
+                a.y as f64 + t,
+                a.x as f64 + r,
+                a.y as f64 + bottom,
+            ];
+        }
         let margin = match self.tool {
             Tool::Counter => self.radius(),
             Tool::Pixelate => 0.,
@@ -86,7 +105,7 @@ impl Annotation {
         let d = tolerance + self.stroke() / 2.;
         match self.tool {
             Tool::Counter => (p.x - a.x).hypot(p.y - a.y) <= self.radius() + tolerance,
-            Tool::Pixelate => true,
+            Tool::Pixelate | Tool::Text => true,
             Tool::Line => segment(p, a, b) <= d,
             Tool::Arrow => {
                 let [tip, left, right] = self.arrow_head();

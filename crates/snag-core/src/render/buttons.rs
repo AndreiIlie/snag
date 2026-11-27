@@ -101,6 +101,10 @@ pub(super) fn draw(frame: &mut PixmapMut<'_>, bar: Toolbar, overlay: &Overlay) {
                 icon.push_circle(16., 16., 10.);
                 polyline(&mut icon, &[(13., 14.), (16., 11.), (16., 21.)]);
             }
+            Button::Tool(Tool::Text) => {
+                polyline(&mut icon, &[(7., 8.), (25., 8.)]);
+                polyline(&mut icon, &[(16., 8.), (16., 25.)]);
+            }
             Button::Undo | Button::Redo => {
                 let x = |n| if action == Button::Redo { 32. - n } else { n };
                 icon.move_to(x(25.), 23.);

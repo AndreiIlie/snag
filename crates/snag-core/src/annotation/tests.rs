@@ -1,3 +1,5 @@
+mod text;
+
 use super::*;
 use crate::{
     export::{decode_png, encode_annotated_png, encode_png},
@@ -112,7 +114,7 @@ fn canvas() -> Overlay {
 
 #[test]
 fn tool_gestures_and_styles_use_capture_coordinates() {
-    for tool in Tool::ALL {
+    for tool in Tool::ALL.into_iter().filter(|tool| *tool != Tool::Text) {
         let view = View::fit((800, 400), (400, 400)).unwrap();
         let mut overlay = Overlay::new(view, ScaleFactor::new(1.5).unwrap());
         assert_eq!(overlay.key(Key::Tool(tool)), (false, None));

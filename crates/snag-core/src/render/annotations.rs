@@ -38,6 +38,13 @@ pub(crate) fn draw_layer(
     let mut path = PathBuilder::new();
     let (a, b) = shape.ends();
     match shape.tool {
+        Tool::Text => {
+            if let Some(outline) = shape.text.as_ref().and_then(|t| t.line.outline.as_ref()) {
+                let at = ts.pre_translate(a.x as f32, a.y as f32);
+                super::path::draw(frame, at, outline, colour, None);
+            }
+            return;
+        }
         Tool::Rectangle | Tool::Ellipse => {
             let Some(bounds) = Rect::from_ltrb(
                 a.x.min(b.x) as f32,
@@ -62,7 +69,7 @@ pub(crate) fn draw_layer(
             head.line_to(right.x as f32, right.y as f32);
             head.close();
             if let Some(p) = head.finish() {
-                super::path::draw(frame, ts, p, colour, None);
+                super::path::draw(frame, ts, &p, colour, None);
             }
             path.move_to(a.x as f32, a.y as f32);
             path.line_to(base.0 as f32, base.1 as f32);
@@ -71,7 +78,7 @@ pub(crate) fn draw_layer(
             *count += 1;
             let radius = shape.radius() as f32;
             if let Some(circle) = PathBuilder::from_circle(a.x as f32, a.y as f32, radius) {
-                super::path::draw(frame, ts, circle, colour, None);
+                super::path::draw(frame, ts, &circle, colour, None);
             }
             let [r, g, b] = shape.style.colour.rgb().map(u32::from);
             let c = if 299 * r + 587 * g + 114 * b > 128000 {
@@ -92,7 +99,7 @@ pub(crate) fn draw_layer(
         Tool::Pixelate => unreachable!(),
     }
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, colour, Some(&stroke));
+        super::path::draw(frame, ts, &path, colour, Some(&stroke));
     }
 }
 
@@ -136,7 +143,7 @@ fn digits(
         ..Stroke::default()
     };
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, colour, Some(&stroke));
+        super::path::draw(frame, ts, &path, colour, Some(&stroke));
     }
 }
 

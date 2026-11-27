@@ -5,7 +5,7 @@ use tiny_skia::{
 pub(super) fn draw(
     target: &mut PixmapMut<'_>,
     transform: Transform,
-    path: Path,
+    path: &Path,
     colour: Color,
     stroke: Option<&Stroke>,
 ) {
@@ -13,22 +13,21 @@ pub(super) fn draw(
         let mut paint = Paint::default();
         paint.set_color(colour);
         if let Some(stroke) = stroke {
-            target.stroke_path(&path, &paint, stroke, transform, None);
+            target.stroke_path(path, &paint, stroke, transform, None);
         } else {
-            target.fill_path(&path, &paint, FillRule::Winding, transform, None);
+            target.fill_path(path, &paint, FillRule::Winding, transform, None);
         }
         return;
     }
-    let outline = if let Some(stroke) = stroke {
-        let Some(outline) = path.stroke(stroke, 1.) else {
-            return;
-        };
-        outline
-    } else {
-        path
-    };
     let origin = (-(transform.tx as i64), -(transform.ty as i64));
-    fill(target, origin, &outline, colour.to_color_u8());
+    let colour = colour.to_color_u8();
+    if let Some(stroke) = stroke {
+        if let Some(outline) = path.stroke(stroke, 1.) {
+            fill(target, origin, &outline, colour);
+        }
+    } else {
+        fill(target, origin, path, colour);
+    }
 }
 
 // Scan the outline once on a quarter-pixel grid fixed to the capture. Clipping

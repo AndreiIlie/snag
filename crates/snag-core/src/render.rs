@@ -87,6 +87,24 @@ pub fn render_overlay(
         }
     }
     draw_selection(&mut frame, view, overlay.selection(), overlay.scale());
+    if let Some([x, top, bottom]) = overlay.text_caret() {
+        let x = (x * ts.sx + ts.tx).round();
+        let width = overlay.scale().get().round().max(1.) as f32;
+        if let Some(rect) = Rect::from_ltrb(
+            x.max(bounds.left() as f32),
+            (top * ts.sy + ts.ty).max(bounds.top() as f32),
+            (x + width).min(bounds.right() as f32),
+            (bottom * ts.sy + ts.ty).min(bounds.bottom() as f32),
+        ) {
+            let mut paint = Paint {
+                anti_alias: false,
+                ..Paint::default()
+            };
+            let [r, g, b, a] = BORDER;
+            paint.set_color_rgba8(r, g, b, a);
+            frame.fill_rect(rect, &paint, Transform::identity(), None);
+        }
+    }
     if let Some(shape) = overlay.selected() {
         annotations::marker(
             &mut frame,
@@ -188,13 +206,19 @@ mod tests {
         assert_eq!(words[60 * 200 + 5], 0x641e05);
         assert_eq!(words[90 * 200 + 60], 0xc83c0a);
         for (button, r) in overlay.toolbar().unwrap().buttons() {
-            let index = (r.top() * 200 + r.left() + r.width() / 2) as usize;
             let background = if overlay.active(button) {
                 0x1c68ac
             } else {
                 0x21252b
             };
-            assert_eq!(words[index], background);
+            // In compact buttons an antialiased icon can reach the top row.
+            assert!(
+                (r.top()..r.bottom()).any(|y| {
+                    let row = (y * 200) as usize;
+                    words[row + r.left() as usize..row + r.right() as usize].contains(&background)
+                }),
+                "{button:?}"
+            );
         }
         let first = words.clone();
         render_overlay(
