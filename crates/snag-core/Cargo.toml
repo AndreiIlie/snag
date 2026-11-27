@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+fontdb.workspace = true
+ttf-parser.workspace = true
 png.workspace = true
 serde.workspace = true
 tiny-skia.workspace = true
