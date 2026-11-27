@@ -17,13 +17,9 @@ fn full_requires_a_destination_before_reading_config() {
 }
 
 #[test]
-fn reports_unavailable_overlay_and_capture() {
+fn reports_missing_display_for_gui_and_full_capture() {
     let config = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
-    for (args, message) in [
-        (&[][..], "interactive overlay"),
-        (&["gui"][..], "interactive overlay"),
-        (&["full", "--copy"][..], "WAYLAND_DISPLAY and DISPLAY"),
-    ] {
+    for args in [&[][..], &["gui"], &["full", "--copy"]] {
         let result = Command::new(env!("CARGO_BIN_EXE_snag"))
             .args(args)
             .env_remove("WAYLAND_DISPLAY")
@@ -33,7 +29,7 @@ fn reports_unavailable_overlay_and_capture() {
             .unwrap();
         assert_eq!(result.status.code(), Some(1));
         let stderr = String::from_utf8_lossy(&result.stderr);
-        assert!(stderr.contains(message), "{stderr}");
+        assert!(stderr.contains("WAYLAND_DISPLAY and DISPLAY"), "{stderr}");
     }
 }
 

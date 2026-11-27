@@ -1,7 +1,10 @@
 mod capture;
 mod cli;
 mod clipboard;
+mod file_uri;
+mod overlay;
 mod run;
+mod save_dialog;
 mod session;
 #[cfg(test)]
 mod tests;
@@ -22,6 +25,8 @@ fn execute(command: Command) -> Result<(), Box<dyn Error>> {
         &mut clipboard::launch::HelperClipboard {
             program: env::current_exe()?,
         },
+        overlay::FullscreenOverlay,
+        save_dialog::Portal,
         thread::sleep,
     )?;
     Ok(())
