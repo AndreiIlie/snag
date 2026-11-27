@@ -121,12 +121,14 @@ impl Overlay {
             _ => false,
         }
     }
+    fn capture_pixels(&self, logical: f64) -> f64 {
+        logical * self.scale.get() / self.view.scale
+    }
     fn annotation_at(&self, point: PixelPoint) -> Option<usize> {
         if !self.on_capture() {
             return None;
         }
-        self.document
-            .hit(point, 3. * self.scale.get() / self.view.scale)
+        self.document.hit(point, self.capture_pixels(3.))
     }
     fn on_capture(&self) -> bool {
         let b = self.view.bounds;
@@ -136,7 +138,7 @@ impl Overlay {
         })
     }
     fn hit(&self, point: PixelPoint) -> Hit {
-        let scale = ScaleFactor::new(self.scale.get() / self.view.scale).unwrap_or(self.scale);
+        let scale = ScaleFactor::new(self.capture_pixels(1.)).unwrap_or(self.scale);
         self.selection
             .map_or(Hit::Outside, |s| s.hit_test(point, scale))
     }
@@ -245,7 +247,7 @@ impl Overlay {
                 self.draft = Some(Annotation::start(
                     self.tool.unwrap(),
                     self.style,
-                    self.scale.get() / self.view.scale,
+                    self.capture_pixels(1.),
                     point,
                 ));
                 Drag::Draw

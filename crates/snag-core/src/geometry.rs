@@ -26,6 +26,15 @@ pub struct PixelPoint {
     pub y: i64,
 }
 
+impl From<PixelPoint> for Point {
+    fn from(p: PixelPoint) -> Self {
+        Self {
+            x: p.x as f64,
+            y: p.y as f64,
+        }
+    }
+}
+
 impl PixelPoint {
     pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
     pub(crate) fn plus(self, other: Self) -> Self {

@@ -3,7 +3,7 @@ use crate::{
     geometry::PixelRect,
     image::{ImageError, RgbaImage},
     render::{
-        annotations::draw_layer,
+        annotations::draw_layers,
         mosaic::{Grid, Mosaic, capture_area, local_transform, premultiply},
     },
 };
@@ -135,16 +135,18 @@ pub fn encode_annotated_png(
     let (area, grids) = required_blocks(image, doc, crop);
     let mut target =
         capture_area(image, area).ok_or(ExportError::Image(ImageError::InvalidDimensions))?;
-    let ts = local_transform(area);
-    let mut count = 0;
-    for (shape, grid) in doc.layers.iter().zip(&grids) {
-        let mosaic = grid.map(|grid| {
-            Mosaic::sample(grid, |x, y| {
-                target.pixel(x - area.left(), y - area.top()).unwrap()
+    draw_layers(
+        &mut target.as_mut(),
+        local_transform(area),
+        &doc.layers,
+        |i, frame| {
+            grids[i].map(|grid| {
+                Mosaic::sample(grid, |x, y| {
+                    frame.pixel(x - area.left(), y - area.top()).unwrap()
+                })
             })
-        });
-        draw_layer(&mut target.as_mut(), ts, shape, &mut count, mosaic.as_ref());
-    }
+        },
+    );
     let stride = area.width() as usize * 4;
     let left = (crop.left() - area.left()) as usize * 4;
     let right = left + crop.width() as usize * 4;

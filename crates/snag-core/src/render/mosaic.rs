@@ -1,4 +1,4 @@
-use super::{RenderError, annotations::draw_layer};
+use super::{RenderError, annotations::draw_layers};
 use crate::{
     annotation::{Annotation, Tool},
     geometry::PixelRect,
@@ -189,16 +189,12 @@ impl MosaicCache {
             }));
         }
         let mut composed = capture_area(image, area).ok_or(RenderError::InvalidBuffer)?;
-        let mut count = 0;
-        for layer in &self.layers {
-            draw_layer(
-                &mut composed.as_mut(),
-                local_transform(area),
-                &layer.shape,
-                &mut count,
-                layer.mosaic.as_ref(),
-            );
-        }
+        draw_layers(
+            &mut composed.as_mut(),
+            local_transform(area),
+            self.layers.iter().map(|layer| &layer.shape),
+            |i, _| self.get(i),
+        );
         Ok(Mosaic::sample(grid, |x, y| {
             composed.pixel(x - area.left(), y - area.top()).unwrap()
         }))

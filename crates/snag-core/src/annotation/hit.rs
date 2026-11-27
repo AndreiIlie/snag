@@ -2,15 +2,6 @@ use super::{Annotation, Tool};
 use crate::geometry::{PixelPoint, Point};
 use std::f64::consts::FRAC_PI_2;
 
-impl From<PixelPoint> for Point {
-    fn from(p: PixelPoint) -> Self {
-        Self {
-            x: p.x as f64,
-            y: p.y as f64,
-        }
-    }
-}
-
 fn segment(p: Point, a: Point, b: Point) -> f64 {
     let (dx, dy) = (b.x - a.x, b.y - a.y);
     let len = dx * dx + dy * dy;

@@ -1,6 +1,6 @@
 use super::RenderError;
 use crate::{image::RgbaImage, view::View};
-use tiny_skia::{Color, ColorU8, Pixmap, PixmapMut};
+use tiny_skia::{ColorU8, Pixmap, PixmapMut};
 
 /// Holds at most one resampled capture for the lifetime of the frozen image.
 pub struct Backdrop<'a> {
@@ -34,9 +34,6 @@ impl<'a> Backdrop<'a> {
             self.scaled = Some(resample(self.image, size)?);
         }
 
-        if size != view.window {
-            frame.fill(Color::BLACK);
-        }
         let width = frame.width() as usize;
         for (y, row) in frame
             .pixels_mut()

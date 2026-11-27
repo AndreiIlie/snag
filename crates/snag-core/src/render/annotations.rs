@@ -3,21 +3,30 @@ use crate::{
     annotation::{Annotation, Tool},
     geometry::PixelRect,
 };
-use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform};
+use std::borrow::Borrow;
+use tiny_skia::{
+    Color, LineCap, LineJoin, Paint, PathBuilder, PixmapMut, PixmapRef, Rect, Stroke, Transform,
+};
 
-pub(crate) fn draw_layer(
+pub(crate) fn draw_layers<'a, M: Borrow<Mosaic>>(
     frame: &mut PixmapMut<'_>,
     ts: Transform,
-    shape: &Annotation,
-    count: &mut usize,
-    mosaic: Option<&Mosaic>,
+    layers: impl IntoIterator<Item = &'a Annotation>,
+    mosaic_at: impl Fn(usize, PixmapRef<'_>) -> Option<M>,
 ) {
-    if shape.tool == Tool::Pixelate {
-        if let Some(blocks) = mosaic {
-            blocks.draw(frame, ts);
+    let mut count = 0;
+    for (index, shape) in layers.into_iter().enumerate() {
+        if shape.tool == Tool::Pixelate {
+            if let Some(mosaic) = mosaic_at(index, frame.as_ref()) {
+                mosaic.borrow().draw(frame, ts);
+            }
+        } else {
+            draw_shape(frame, ts, shape, &mut count);
         }
-        return;
     }
+}
+
+fn draw_shape(frame: &mut PixmapMut<'_>, ts: Transform, shape: &Annotation, count: &mut usize) {
     let [r, g, b] = shape.style.colour.rgb();
     let colour = Color::from_rgba8(
         r,
