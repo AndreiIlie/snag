@@ -1,0 +1,12 @@
+[package]
+name = "snag-app"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "snag"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+snag-core = { path = "../snag-core" }
