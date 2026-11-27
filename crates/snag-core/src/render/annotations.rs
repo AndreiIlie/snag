@@ -3,7 +3,7 @@ use crate::{
     annotation::{Annotation, Tool},
     geometry::PixelRect,
 };
-use tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform};
+use tiny_skia::{Color, LineCap, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform};
 
 pub(crate) fn draw_layer(
     frame: &mut PixmapMut<'_>,
@@ -19,8 +19,7 @@ pub(crate) fn draw_layer(
         return;
     }
     let [r, g, b] = shape.style.colour.rgb();
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(
+    let colour = Color::from_rgba8(
         r,
         g,
         b,
@@ -63,7 +62,7 @@ pub(crate) fn draw_layer(
             head.line_to(right.x as f32, right.y as f32);
             head.close();
             if let Some(p) = head.finish() {
-                super::path::draw(frame, ts, p, &paint, None);
+                super::path::draw(frame, ts, p, colour, None);
             }
             path.move_to(a.x as f32, a.y as f32);
             path.line_to(base.0 as f32, base.1 as f32);
@@ -72,7 +71,7 @@ pub(crate) fn draw_layer(
             *count += 1;
             let radius = shape.radius() as f32;
             if let Some(circle) = PathBuilder::from_circle(a.x as f32, a.y as f32, radius) {
-                super::path::draw(frame, ts, circle, &paint, None);
+                super::path::draw(frame, ts, circle, colour, None);
             }
             let [r, g, b] = shape.style.colour.rgb().map(u32::from);
             let c = if 299 * r + 587 * g + 114 * b > 128000 {
@@ -80,8 +79,8 @@ pub(crate) fn draw_layer(
             } else {
                 255
             };
-            paint.set_color_rgba8(c, c, c, 255);
-            digits(frame, ts, (a.x as f32, a.y as f32), radius, *count, &paint);
+            let ink = Color::from_rgba8(c, c, c, 255);
+            digits(frame, ts, (a.x as f32, a.y as f32), radius, *count, ink);
             return;
         }
         Tool::Pen | Tool::Highlighter | Tool::Line => {
@@ -93,7 +92,7 @@ pub(crate) fn draw_layer(
         Tool::Pixelate => unreachable!(),
     }
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, &paint, Some(&stroke));
+        super::path::draw(frame, ts, path, colour, Some(&stroke));
     }
 }
 
@@ -104,7 +103,7 @@ fn digits(
     (cx, cy): (f32, f32),
     radius: f32,
     number: usize,
-    paint: &Paint<'_>,
+    colour: Color,
 ) {
     const DIGITS: [u8; 10] = [0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x6f];
     const SEGMENTS: [(f32, f32, f32, f32); 7] = [
@@ -137,7 +136,7 @@ fn digits(
         ..Stroke::default()
     };
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, paint, Some(&stroke));
+        super::path::draw(frame, ts, path, colour, Some(&stroke));
     }
 }
 
