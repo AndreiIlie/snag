@@ -30,7 +30,11 @@ enum Mode {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
-    Gui,
+    Gui {
+        output: Option<PathBuf>,
+        copy: bool,
+        delay_ms: Option<u64>,
+    },
     ServeClipboard,
     Full {
         destination: Destination,
@@ -63,7 +67,11 @@ impl Command {
         }
         let args = Args::try_parse_from(args)?;
         if !matches!(args.mode, Some(Mode::Full)) {
-            return Ok(Self::Gui);
+            return Ok(Self::Gui {
+                output: args.output,
+                copy: args.copy,
+                delay_ms: args.delay,
+            });
         }
         let destination = match (args.output, args.copy) {
             (Some(path), copy) => Destination::File { path, copy },
@@ -93,11 +101,22 @@ mod tests {
 
     #[test]
     fn parses_modes_and_flags() {
-        assert_eq!(Command::parse_from(["snag"]).unwrap(), Command::Gui);
+        assert_eq!(
+            Command::parse_from(["snag"]).unwrap(),
+            Command::Gui {
+                output: None,
+                copy: false,
+                delay_ms: None
+            }
+        );
         assert_eq!(
             Command::parse_from(["snag", "gui", "--output", "shot", "--delay", "2", "--copy"])
                 .unwrap(),
-            Command::Gui
+            Command::Gui {
+                output: Some("shot".into()),
+                copy: true,
+                delay_ms: Some(2)
+            }
         );
         let cmd =
             Command::parse_from(["snag", "--copy", "full", "--output", "shot", "--delay", "0"])

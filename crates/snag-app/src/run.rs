@@ -2,17 +2,30 @@ use crate::cli::{Command, Destination};
 use snag_core::{
     config::Config,
     export::{ExportError, encode_png},
-    platform::{CaptureError, ClipboardBackend, ClipboardError, ScreenCapture},
+    geometry::PixelRect,
+    platform::{CaptureError, ClipboardBackend, ClipboardError, ScreenCapture, Screenshot},
+    toolbar::Action,
 };
-use std::{error::Error, fmt, fs, io, path::PathBuf, time::Duration};
+use std::{error::Error, fmt, fs, path::PathBuf, time::Duration};
+
+pub type Choice = (Action, Option<PixelRect>);
+
+pub trait OverlayWindow {
+    fn choose(self, shot: &Screenshot) -> Result<Choice, Box<dyn Error>>;
+}
+
+pub trait SaveDialog {
+    fn path(self) -> Result<Option<PathBuf>, Box<dyn Error>>;
+}
 
 #[derive(Debug)]
 pub enum RunError {
-    OverlayUnavailable,
+    Cancelled,
+    Overlay(Box<dyn Error>),
     Capture(CaptureError),
     Export(ExportError),
     Destinations {
-        file: Option<(PathBuf, io::Error)>,
+        save: Option<String>,
         clipboard: Option<ClipboardError>,
     },
 }
@@ -20,14 +33,13 @@ pub enum RunError {
 impl fmt::Display for RunError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::OverlayUnavailable => {
-                f.write_str("the interactive overlay is not available in this build")
-            }
+            Self::Cancelled => f.write_str("cancelled"),
+            Self::Overlay(e) => write!(f, "could not display the overlay: {e}"),
             Self::Capture(e) => write!(f, "screen capture failed: {e}"),
             Self::Export(e) => e.fmt(f),
-            Self::Destinations { file, clipboard } => {
-                if let Some((path, e)) = file {
-                    write!(f, "could not save {}: {e}", path.display())?;
+            Self::Destinations { save, clipboard } => {
+                if let Some(error) = save {
+                    f.write_str(error)?;
                     if clipboard.is_some() {
                         writeln!(f)?;
                     }
@@ -48,32 +60,72 @@ pub fn run(
     config: &Config,
     capture: &mut impl ScreenCapture,
     clipboard: &mut impl ClipboardBackend,
+    overlay: impl OverlayWindow,
+    dialog: impl SaveDialog,
     sleep: impl FnOnce(Duration),
 ) -> Result<(), RunError> {
-    let Command::Full {
-        destination,
-        delay_ms,
-    } = command
-    else {
-        return Err(RunError::OverlayUnavailable);
+    let delay = match command {
+        Command::Full { delay_ms, .. } | Command::Gui { delay_ms, .. } => {
+            delay_ms.unwrap_or(config.capture.delay_ms)
+        }
+        Command::ServeClipboard => unreachable!("helper mode is dispatched before capture"),
     };
-    let delay = delay_ms.unwrap_or(config.capture.delay_ms);
     if delay > 0 {
         sleep(Duration::from_millis(delay));
     }
     let shot = capture.capture().map_err(RunError::Capture)?;
-    let png = encode_png(&shot.image, None).map_err(RunError::Export)?;
-    let (file_error, copy) = match destination {
-        Destination::File { path, copy } => (fs::write(&path, &png).err().map(|e| (path, e)), copy),
-        Destination::Clipboard => (None, true),
+    let (crop, file, copy) = match command {
+        Command::Full { destination, .. } => match destination {
+            Destination::File { path, copy } => (None, Ok(Some(path)), copy),
+            Destination::Clipboard => (None, Ok(None), true),
+        },
+        Command::Gui { output, copy, .. } => {
+            let (action, crop) = overlay.choose(&shot).map_err(RunError::Overlay)?;
+            match action {
+                Action::Cancel => return Err(RunError::Cancelled),
+                Action::Copy => (crop, Ok(None), true),
+                Action::Save => {
+                    let path = match output {
+                        Some(path) => Ok(Some(path)),
+                        None => match dialog.path() {
+                            Ok(None) => return Err(RunError::Cancelled),
+                            result => {
+                                result.map_err(|e| format!("could not select a file to save: {e}"))
+                            }
+                        },
+                    };
+                    (crop, path, copy)
+                }
+            }
+        }
+        Command::ServeClipboard => unreachable!(),
     };
-    let clipboard_error = if copy {
-        clipboard.set_png(&png).err()
+    let png = encode_png(&shot.image, crop).map_err(RunError::Export)?;
+    deliver(&png, file, copy, clipboard)
+}
+
+fn deliver(
+    png: &[u8],
+    file: Result<Option<PathBuf>, String>,
+    copy: bool,
+    clipboard: &mut impl ClipboardBackend,
+) -> Result<(), RunError> {
+    let save = file
+        .and_then(|path| {
+            if let Some(path) = path {
+                fs::write(&path, png)
+                    .map_err(|e| format!("could not save {}: {e}", path.display()))?;
+            }
+            Ok(())
+        })
+        .err();
+    let clipboard = if copy {
+        clipboard.set_png(png).err()
     } else {
         None
     };
-    match (file_error, clipboard_error) {
+    match (save, clipboard) {
         (None, None) => Ok(()),
-        (file, clipboard) => Err(RunError::Destinations { file, clipboard }),
+        (save, clipboard) => Err(RunError::Destinations { save, clipboard }),
     }
 }

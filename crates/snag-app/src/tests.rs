@@ -1,15 +1,16 @@
 use crate::{
     cli::{Command, Destination},
-    run::{RunError, run},
+    run::{Choice, OverlayWindow, RunError, SaveDialog, run},
 };
 use snag_core::{
     config::Config,
-    export::encode_png,
-    geometry::ScaleFactor,
+    export::{decode_png, encode_png},
+    geometry::{PixelRect, ScaleFactor},
     image::RgbaImage,
     platform::{
         CaptureError, ClipboardBackend, ClipboardError, FakeCapture, MemoryClipboard, Screenshot,
     },
+    toolbar::Action,
 };
 use std::{
     env, fs, io,
@@ -18,6 +19,28 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
+
+struct Unused;
+impl OverlayWindow for Unused {
+    fn choose(self, _: &Screenshot) -> Result<Choice, Box<dyn std::error::Error>> {
+        panic!("unexpected overlay")
+    }
+}
+impl SaveDialog for Unused {
+    fn path(self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+        panic!("unexpected save dialog")
+    }
+}
+impl OverlayWindow for Choice {
+    fn choose(self, _: &Screenshot) -> Result<Choice, Box<dyn std::error::Error>> {
+        Ok(self)
+    }
+}
+impl SaveDialog for Option<PathBuf> {
+    fn path(self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+        Ok(self)
+    }
+}
 
 struct TempDir(PathBuf);
 
@@ -98,6 +121,8 @@ fn saves_and_copies_the_same_png_and_honors_delay_precedence() {
         &config,
         &mut capture,
         &mut clipboard,
+        Unused,
+        Unused,
         |d| sleeps.push(d),
     )
     .unwrap();
@@ -105,9 +130,15 @@ fn saves_and_copies_the_same_png_and_honors_delay_precedence() {
     assert!(clipboard.png().is_none());
 
     let command = Command::parse_from(["snag", "full", "--copy", "--delay", "11"]).unwrap();
-    run(command, &config, &mut capture, &mut clipboard, |d| {
-        sleeps.push(d)
-    })
+    run(
+        command,
+        &config,
+        &mut capture,
+        &mut clipboard,
+        Unused,
+        Unused,
+        |d| sleeps.push(d),
+    )
     .unwrap();
     assert_eq!(clipboard.png(), Some(expected.as_slice()));
     assert_eq!(
@@ -118,7 +149,7 @@ fn saves_and_copies_the_same_png_and_honors_delay_precedence() {
 }
 
 #[test]
-fn capture_failure_preserves_destinations_and_gui_does_not_capture() {
+fn capture_failure_preserves_destinations_and_skips_the_overlay() {
     let dir = TempDir::new();
     let output = dir.0.join("capture.png");
     let mut capture = FakeCapture::new(Err(CaptureError("capture denied".into())));
@@ -129,6 +160,8 @@ fn capture_failure_preserves_destinations_and_gui_does_not_capture() {
         &Config::default(),
         &mut capture,
         &mut clipboard,
+        Unused,
+        Unused,
         |_| {},
     )
     .unwrap_err();
@@ -137,15 +170,17 @@ fn capture_failure_preserves_destinations_and_gui_does_not_capture() {
     assert_eq!(clipboard.png(), Some(b"previous".as_slice()));
     assert!(matches!(
         run(
-            Command::Gui,
+            Command::parse_from(["snag"]).unwrap(),
             &Config::default(),
             &mut capture,
             &mut clipboard,
+            Unused,
+            Unused,
             |_| {}
         ),
-        Err(RunError::OverlayUnavailable)
+        Err(RunError::Capture(_))
     ));
-    assert_eq!(capture.calls(), 1);
+    assert_eq!(capture.calls(), 2);
 }
 
 #[test]
@@ -163,6 +198,8 @@ fn attempts_both_destinations_and_reports_each_failure() {
             &Config::default(),
             &mut capture,
             clipboard,
+            Unused,
+            Unused,
             |_| {},
         )
         .unwrap_err()
@@ -176,6 +213,122 @@ fn attempts_both_destinations_and_reports_each_failure() {
     assert_eq!(fs::read(output).unwrap(), expected);
     let error = save_and_copy(missing.clone(), &mut clipboard);
     assert!(error.contains(missing.to_str().unwrap()) && error.contains("clipboard unavailable"));
+}
+
+#[test]
+fn gui_copy_encodes_the_selected_capture_pixels_and_honors_delay() {
+    let shot = screenshot();
+    let mut capture = FakeCapture::new(Ok(shot.clone()));
+    let mut clipboard = MemoryClipboard::default();
+    let config = Config::parse("[capture]\ndelay_ms = 51").unwrap();
+    for (crop, delay_ms, wait) in [(PixelRect::new(0, 0, 1, 1), Some(12), 12), (None, None, 51)] {
+        let mut slept = None;
+        run(
+            Command::Gui {
+                output: None,
+                copy: false,
+                delay_ms,
+            },
+            &config,
+            &mut capture,
+            &mut clipboard,
+            (Action::Copy, crop),
+            Unused,
+            |d| slept = Some(d),
+        )
+        .unwrap();
+        assert_eq!(slept, Some(Duration::from_millis(wait)));
+        let image = decode_png(clipboard.png().unwrap()).unwrap();
+        assert_eq!(
+            image,
+            crop.map_or_else(|| shot.image.clone(), |r| shot.image.crop(r).unwrap())
+        );
+    }
+}
+
+#[test]
+fn gui_save_uses_output_or_the_selected_path_and_can_also_copy() {
+    let dir = TempDir::new();
+    let file = dir.0.join("as typed");
+    let shot = screenshot();
+    let crop = PixelRect::new(1, 0, 2, 1);
+    let png = encode_png(&shot.image, crop).unwrap();
+    let mut capture = FakeCapture::new(Ok(shot));
+    let mut clipboard = MemoryClipboard::default();
+    let gui = |output, copy| Command::Gui {
+        output,
+        copy,
+        delay_ms: None,
+    };
+    let save = (Action::Save, crop);
+    run(
+        gui(None, false),
+        &Config::default(),
+        &mut capture,
+        &mut clipboard,
+        save,
+        Some(file.clone()),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(fs::read(&file).unwrap(), png);
+    assert!(clipboard.png().is_none());
+    fs::remove_file(&file).unwrap();
+    run(
+        gui(Some(file.clone()), true),
+        &Config::default(),
+        &mut capture,
+        &mut clipboard,
+        save,
+        Unused,
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(fs::read(&file).unwrap(), png);
+    assert_eq!(clipboard.png(), Some(png.as_slice()));
+    clipboard.error = Some(ClipboardError("lost clipboard".into()));
+    let missing = dir.0.join("missing/shot");
+    let error = run(
+        gui(Some(missing.clone()), true),
+        &Config::default(),
+        &mut capture,
+        &mut clipboard,
+        save,
+        Unused,
+        |_| {},
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains(missing.to_str().unwrap()) && error.contains("lost clipboard"));
+}
+
+#[test]
+fn cancelling_the_overlay_or_dialog_preserves_destinations() {
+    let dir = TempDir::new();
+    let path = dir.0.join("existing.png");
+    fs::write(&path, b"original").unwrap();
+    let mut capture = FakeCapture::new(Ok(screenshot()));
+    let mut clipboard = MemoryClipboard::default();
+    clipboard.set_png(b"previous").unwrap();
+    for (action, output) in [(Action::Cancel, Some(path.clone())), (Action::Save, None)] {
+        let error = run(
+            Command::Gui {
+                output,
+                copy: true,
+                delay_ms: None,
+            },
+            &Config::default(),
+            &mut capture,
+            &mut clipboard,
+            (action, None),
+            None,
+            |_| {},
+        )
+        .unwrap_err();
+        assert!(matches!(error, RunError::Cancelled));
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(clipboard.png(), Some(&b"previous"[..]));
+    }
 }
 
 #[test]
