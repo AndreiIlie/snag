@@ -18,7 +18,7 @@ pkg=$work/package
 export SOURCE_DATE_EPOCH
 host=$(rustc -vV | sed -n 's/^host: //p')
 sysroot=$(rustc --print sysroot)
-cargo_home=$(cd "${CARGO_HOME:-$HOME/.cargo}" && pwd -P)
+cargo_home=$(realpath -m -- "${CARGO_HOME:-$HOME/.cargo}")
 arch=$(dpkg --print-architecture)
 # Cargo accepts ASCII unit separators between flags, including paths with spaces.
 sep=$(printf '\037')

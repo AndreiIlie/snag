@@ -22,7 +22,7 @@ deb=$(packaging/build-deb.sh) && sudo apt install "$deb"
 
 The script prints the exact package path under `target/deb/` (or `$CARGO_TARGET_DIR/deb/`). The package installs the binary, Snag launcher, icon and copyright notices.
 
-Two builds from the same commit produce identical packages with the same architecture, toolchain, system libraries, packaging tools and `SOURCE_DATE_EPOCH`. By default the script uses the commit timestamp. Build on the oldest release you intend to support because the package records its required glibc version. For example, a package requiring glibc 2.43 from Ubuntu 26.04 cannot run on Ubuntu 24.04 with glibc 2.39.
+Two builds from the same commit produce byte-identical packages with the same architecture, toolchain, system libraries, packaging tools and `SOURCE_DATE_EPOCH`, even when the checkout and target directories differ. By default the script uses the commit timestamp. Build on the oldest release you intend to support because the package records its required glibc version. For example, a package requiring glibc 2.43 from Ubuntu 26.04 cannot run on Ubuntu 24.04 with glibc 2.39.
 
 ### Single binary
 
