@@ -160,7 +160,7 @@ macro_rules! dispatch_data_control {
             fn event(state: &mut Self, _: &$source::$source_ty, event: $source::Event, _: &(),
                 _: &Connection, _: &QueueHandle<Self>) {
                 match event {
-                    $source::Event::Send { mime_type, fd } if mime_type == PNG_MIME && state.drain_deadline.is_none() => {
+                    $source::Event::Send { mime_type, fd } if mime_type == PNG_MIME => {
                         state.writers.write(fd, state.png.clone());
                     }
                     $source::Event::Cancelled => state.lost(),
