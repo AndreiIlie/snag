@@ -66,12 +66,11 @@ pub fn render_overlay(
         bounds.top() as f32,
     );
     backdrop.mosaics.update(backdrop.image, overlay.layers())?;
-    let mut count = 0;
-    for (i, shape) in overlay.layers().enumerate() {
-        annotations::draw_layer(&mut frame, ts, shape, &mut count, backdrop.mosaics.get(i));
-    }
-    if overlay.layers().next().is_some() && (bounds.width(), bounds.height()) != view.window {
-        // Restore the margins after painting strokes that cross the capture edges.
+    annotations::draw_layers(&mut frame, ts, overlay.layers(), |i, _| {
+        backdrop.mosaics.get(i)
+    });
+    if (bounds.width(), bounds.height()) != view.window {
+        // Fill the margins after painting strokes that cross the capture edges.
         let black = tiny_skia::PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap();
         for (y, row) in frame
             .pixels_mut()
