@@ -226,7 +226,7 @@ impl Overlay {
                 Some(Button::Width(_) | Button::Colour(_))
             );
         if finished {
-            self.finish_text();
+            self.commit_draft();
         }
         if self.pressed_button.is_some() || self.drag.is_some() {
             return finished;
@@ -267,15 +267,17 @@ impl Overlay {
         self.selection.is_some()
     }
 
+    fn commit_draft(&mut self) {
+        if let Some(draft) = self.draft.take().filter(Annotation::drawable) {
+            self.history
+                .execute(Edit::Add(Some(draft)), &mut self.document);
+        }
+    }
+
     pub fn release(&mut self) -> (bool, Option<Action>) {
         let redraw = self.drag.is_some() && self.selection.is_some();
         match self.drag.take().map(|(_, d)| d) {
-            Some(Drag::Draw) => {
-                if let Some(shape) = self.draft.take().filter(Annotation::drawable) {
-                    self.history
-                        .execute(Edit::Add(Some(shape)), &mut self.document);
-                }
-            }
+            Some(Drag::Draw) => self.commit_draft(),
             Some(Drag::Annotation { index, origin }) => {
                 let to = self.document.layers[index].offset;
                 if origin != to {

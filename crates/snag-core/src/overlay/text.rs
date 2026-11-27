@@ -1,6 +1,6 @@
 use super::{Key, Overlay};
 use crate::{
-    annotation::{Annotation, Edit, Text, Tool, Width},
+    annotation::{Annotation, Text, Tool, Width},
     geometry::PixelPoint,
 };
 
@@ -21,13 +21,6 @@ impl Overlay {
         }));
         self.draft = Some(draft);
         self.caret = 0;
-    }
-
-    pub(super) fn finish_text(&mut self) {
-        if let Some(draft) = self.draft.take().filter(Annotation::drawable) {
-            self.history
-                .execute(Edit::Add(Some(draft)), &mut self.document);
-        }
     }
 
     pub(super) fn resize_text(&mut self, width: Width) {
@@ -86,7 +79,7 @@ impl Overlay {
                 return Some(true);
             }
             _ => {
-                self.finish_text();
+                self.commit_draft();
                 return (key == Key::Enter).then_some(true);
             }
         }

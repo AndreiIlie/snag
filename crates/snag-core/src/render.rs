@@ -87,32 +87,22 @@ pub fn render_overlay(
         }
     }
     draw_selection(&mut frame, view, overlay.selection(), overlay.scale());
+    let border_width = overlay.scale().get().round().max(1.) as f32;
     if let Some([x, top, bottom]) = overlay.text_caret() {
         let x = (x * ts.sx + ts.tx).round();
-        let width = overlay.scale().get().round().max(1.) as f32;
-        if let Some(rect) = Rect::from_ltrb(
-            x.max(bounds.left() as f32),
-            (top * ts.sy + ts.ty).max(bounds.top() as f32),
-            (x + width).min(bounds.right() as f32),
-            (bottom * ts.sy + ts.ty).min(bounds.bottom() as f32),
-        ) {
-            let mut paint = Paint {
-                anti_alias: false,
-                ..Paint::default()
-            };
-            let [r, g, b, a] = BORDER;
-            paint.set_color_rgba8(r, g, b, a);
-            frame.fill_rect(rect, &paint, Transform::identity(), None);
-        }
+        annotations::fill_border(
+            &mut frame,
+            bounds,
+            [
+                x,
+                top * ts.sy + ts.ty,
+                x + border_width,
+                bottom * ts.sy + ts.ty,
+            ],
+        );
     }
     if let Some(shape) = overlay.selected() {
-        annotations::marker(
-            &mut frame,
-            shape,
-            ts,
-            bounds,
-            overlay.scale().get().round().max(1.) as f32,
-        );
+        annotations::marker(&mut frame, shape, ts, bounds, border_width);
     }
     if let Some(bar) = overlay.toolbar() {
         buttons::draw(&mut frame, bar, overlay);

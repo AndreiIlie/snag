@@ -161,25 +161,29 @@ pub(super) fn marker(
         r as f32 * ts.sx + ts.tx,
         b as f32 * ts.sy + ts.ty,
     );
-    let mut paint = Paint {
-        anti_alias: false,
-        ..Paint::default()
-    };
-    let [red, green, blue, alpha] = super::BORDER;
-    paint.set_color_rgba8(red, green, blue, alpha);
-    for (x, y, end, bottom) in [
-        (l - width, t - width, r + width, t),
-        (l - width, b, r + width, b + width),
-        (l - width, t, l, b),
-        (r, t, r + width, b),
+    for edge in [
+        [l - width, t - width, r + width, t],
+        [l - width, b, r + width, b + width],
+        [l - width, t, l, b],
+        [r, t, r + width, b],
     ] {
-        if let Some(rect) = Rect::from_ltrb(
-            x.max(clip.left() as f32),
-            y.max(clip.top() as f32),
-            end.min(clip.right() as f32),
-            bottom.min(clip.bottom() as f32),
-        ) {
-            frame.fill_rect(rect, &paint, Transform::identity(), None);
-        }
+        fill_border(frame, clip, edge);
+    }
+}
+
+pub(super) fn fill_border(frame: &mut PixmapMut<'_>, clip: PixelRect, [l, t, r, b]: [f32; 4]) {
+    if let Some(rect) = Rect::from_ltrb(
+        l.max(clip.left() as f32),
+        t.max(clip.top() as f32),
+        r.min(clip.right() as f32),
+        b.min(clip.bottom() as f32),
+    ) {
+        let mut paint = Paint {
+            anti_alias: false,
+            ..Paint::default()
+        };
+        let [red, green, blue, alpha] = super::BORDER;
+        paint.set_color_rgba8(red, green, blue, alpha);
+        frame.fill_rect(rect, &paint, Transform::identity(), None);
     }
 }
