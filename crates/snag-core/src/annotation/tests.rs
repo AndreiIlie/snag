@@ -52,14 +52,14 @@ fn history_restores_layers_and_moves_in_drawing_order() {
         },
         &mut doc,
     );
-    assert_eq!(doc.layers, [line.clone()]);
+    assert_eq!(doc.layers.as_slice(), std::slice::from_ref(&line));
     history.undo(&mut doc);
     assert_eq!(doc.layers, [moved, line.clone()]);
     history.redo(&mut doc);
     history.undo(&mut doc);
     history.undo(&mut doc);
     history.undo(&mut doc);
-    assert_eq!(doc.layers, [red.clone()]);
+    assert_eq!(doc.layers.as_slice(), std::slice::from_ref(&red));
     history.redo(&mut doc);
     assert_eq!(doc.layers, [red.clone(), line]);
     history.undo(&mut doc);
@@ -237,8 +237,10 @@ fn capture_space_mosaics_survive_fit_cropping_and_mid_drag_copy() {
     assert!(
         result
             .pixels()
-            .chunks_exact(4)
-            .all(|px| px == [85, 85, 85, 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|px| *px == [85, 85, 85, 255])
     );
 }
 
@@ -272,7 +274,7 @@ fn marker_and_dim_stay_in_preview_and_tools_clip_to_the_capture() {
 #[test]
 fn mosaics_compose_in_order_and_preserve_only_untouched_straight_alpha() {
     let mut bytes = [20, 0, 0, 1].repeat(64 * 64);
-    for pair in bytes.chunks_exact_mut(8) {
+    for pair in bytes.as_chunks_mut::<8>().0 {
         pair[4] = 80;
     }
     let image = RgbaImage::new(64, 64, bytes).unwrap();
@@ -303,4 +305,69 @@ fn mosaics_compose_in_order_and_preserve_only_untouched_straight_alpha() {
             .unwrap();
     assert_eq!(rgba(&out, 1, 2), [255, 0, 0, 255]);
     assert_eq!(rgba(&out, 9, 10), before);
+}
+
+#[test]
+fn deleting_a_counter_renumbers_later_digits_and_undo_restores_them() {
+    let image = RgbaImage::new(480, 480, [25, 30, 35, 255].repeat(480 * 480)).unwrap();
+    let mut o = canvas();
+    let mut frame = vec![0; 480 * 480 * 4];
+    let mut backdrop = Backdrop::new(&image);
+    o.key(Key::Tool(Tool::Counter));
+    for x in [80, 160] {
+        press(&mut o, x, 80);
+        o.release();
+    }
+    o.key(Key::Tool(Tool::Counter));
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    let second = (80 * 480 + 160) * 4;
+    // The middle bar is present in digit 2 and absent in digit 1.
+    assert_eq!(&frame[second..second + 4], &[255; 4]);
+    press(&mut o, 80, 80);
+    o.release();
+    o.key(Key::Delete);
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    assert_eq!(&frame[second..second + 4], &[255, 0, 0, 255]);
+    o.key(Key::Undo);
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    assert_eq!(&frame[second..second + 4], &[255; 4]);
+}
+
+#[test]
+fn the_identity_preview_and_export_share_layer_colours_after_edits() {
+    let mut o = canvas();
+    o.key(Key::Tool(Tool::Highlighter));
+    press(&mut o, 100, 100);
+    for point in [p(200, 200), p(100, 200), p(200, 100)] {
+        o.pointer_moved(point.into());
+    }
+    o.release();
+    let image = RgbaImage::new(480, 480, [10, 20, 30, 255].repeat(480 * 480)).unwrap();
+    let mut backdrop = Backdrop::new(&image);
+    let mut frame = vec![0; 480 * 480 * 4];
+    let i = (150 * 480 + 150) * 4;
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    assert_eq!(&frame[i..i + 4], &[108, 12, 18, 255]);
+    o.key(Key::Tool(Tool::Pixelate));
+    drag(&mut o, p(100, 125), p(202, 187));
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    let before = frame.clone();
+    o.key(Key::Undo);
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    assert_ne!(before, frame);
+    o.key(Key::Redo);
+    render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+    assert_eq!(before, frame);
+    let crop = PixelRect::new(112, 112, 214, 208).unwrap();
+    let result =
+        decode_png(&encode_annotated_png(&image, &o.into_document(), Some(crop)).unwrap()).unwrap();
+    for y in crop.top()..crop.bottom() {
+        let start = ((y * 480 + crop.left()) * 4) as usize;
+        let end = start + crop.width() as usize * 4;
+        let row = ((y - crop.top()) * crop.width() * 4) as usize;
+        assert_eq!(
+            &frame[start..end],
+            &result.pixels()[row..row + (end - start)]
+        );
+    }
 }

@@ -124,6 +124,14 @@ mod tests {
             ScaleFactor::ONE,
         )
         .unwrap();
+        let expected = Tool::ALL
+            .map(Button::Tool)
+            .into_iter()
+            .chain([Button::Undo, Button::Redo])
+            .chain(Colour::ALL.map(Button::Colour))
+            .chain(Width::ALL.map(Button::Width))
+            .chain([Action::Copy, Action::Save, Action::Cancel].map(Button::Close));
+        assert!(bar.buttons().map(|(button, _)| button).eq(expected));
         assert_eq!(bar.left, 0);
         assert!(
             bar.buttons()

@@ -2,6 +2,7 @@ pub(crate) mod annotations;
 mod backdrop;
 mod buttons;
 pub(crate) mod mosaic;
+mod path;
 
 use crate::{
     geometry::ScaleFactor,

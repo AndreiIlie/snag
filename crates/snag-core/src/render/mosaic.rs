@@ -116,7 +116,10 @@ pub(crate) fn premultiply(bytes: &[u8]) -> PremultipliedColorU8 {
 
 pub(crate) fn capture_area(image: &RgbaImage, area: PixelRect) -> Option<Pixmap> {
     let mut out = Pixmap::new(area.width(), area.height())?;
-    let src = image.rows(area).ok()?.flat_map(|row| row.chunks_exact(4));
+    let src = image
+        .rows(area)
+        .ok()?
+        .flat_map(|row| row.as_chunks::<4>().0.iter());
     for (dst, source) in out.pixels_mut().iter_mut().zip(src) {
         *dst = premultiply(source);
     }

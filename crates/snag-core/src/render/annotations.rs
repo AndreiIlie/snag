@@ -3,9 +3,7 @@ use crate::{
     annotation::{Annotation, Tool},
     geometry::PixelRect,
 };
-use tiny_skia::{
-    FillRule, LineCap, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform,
-};
+use tiny_skia::{LineCap, LineJoin, Paint, PathBuilder, PixmapMut, Rect, Stroke, Transform};
 
 pub(crate) fn draw_layer(
     frame: &mut PixmapMut<'_>,
@@ -65,7 +63,7 @@ pub(crate) fn draw_layer(
             head.line_to(right.x as f32, right.y as f32);
             head.close();
             if let Some(p) = head.finish() {
-                frame.fill_path(&p, &paint, FillRule::Winding, ts, None);
+                super::path::draw(frame, ts, p, &paint, None);
             }
             path.move_to(a.x as f32, a.y as f32);
             path.line_to(base.0 as f32, base.1 as f32);
@@ -74,7 +72,7 @@ pub(crate) fn draw_layer(
             *count += 1;
             let radius = shape.radius() as f32;
             if let Some(circle) = PathBuilder::from_circle(a.x as f32, a.y as f32, radius) {
-                frame.fill_path(&circle, &paint, FillRule::Winding, ts, None);
+                super::path::draw(frame, ts, circle, &paint, None);
             }
             let [r, g, b] = shape.style.colour.rgb().map(u32::from);
             let c = if 299 * r + 587 * g + 114 * b > 128000 {
@@ -95,7 +93,7 @@ pub(crate) fn draw_layer(
         Tool::Pixelate => unreachable!(),
     }
     if let Some(path) = path.finish() {
-        frame.stroke_path(&path, &paint, &stroke, ts, None);
+        super::path::draw(frame, ts, path, &paint, Some(&stroke));
     }
 }
 
@@ -139,7 +137,7 @@ fn digits(
         ..Stroke::default()
     };
     if let Some(path) = path.finish() {
-        frame.stroke_path(&path, paint, &stroke, ts, None);
+        super::path::draw(frame, ts, path, paint, Some(&stroke));
     }
 }
 
