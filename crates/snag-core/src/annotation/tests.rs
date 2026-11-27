@@ -207,6 +207,55 @@ fn exported_geometry_and_blending_match_each_tool() {
 }
 
 #[test]
+fn fitted_frame_scales_and_positions_stroked_and_filled_tools() {
+    let background = [10, 20, 30, 255];
+    let red = [255, 0, 0, 255];
+    let image = RgbaImage::new(480, 480, background.repeat(480 * 480)).unwrap();
+    let fitted = View::fit((480, 480), (240, 280)).unwrap();
+    let mut backdrop = Backdrop::new(&image);
+    let mut frame = vec![0; 240 * 280 * 4];
+    // The half-size capture starts 20 pixels below the top of the frame.
+    for (tool, x, y, expected) in [
+        (Tool::Arrow, 95, 105, red),
+        (Tool::Line, 80, 90, red),
+        (Tool::Rectangle, 60, 90, red),
+        (Tool::Ellipse, 60, 90, red),
+        (Tool::Pen, 80, 90, red),
+        (Tool::Highlighter, 80, 90, [108, 12, 18, 255]),
+        (Tool::Counter, 56, 70, red),
+    ] {
+        let mut o = canvas();
+        o.key(Key::Tool(tool));
+        drag(&mut o, p(120, 100), p(200, 180));
+        o.set_view(fitted, ScaleFactor::ONE);
+        render_overlay(&mut backdrop, &o, &mut frame).unwrap();
+        let pixels = frame.as_chunks::<4>().0;
+        assert_eq!(pixels[y * 240 + x], expected, "{tool:?}");
+        assert_eq!(
+            pixels[140 * 240 + 160],
+            background,
+            "{tool:?} at unfitted coordinates"
+        );
+    }
+}
+
+#[test]
+fn counters_on_light_backgrounds_have_black_digits() {
+    let image = RgbaImage::new(80, 80, [10, 20, 30, 255].repeat(80 * 80)).unwrap();
+    for colour in [Colour::Yellow, Colour::White] {
+        let mut counter = shape(Tool::Counter, p(30, 30), p(30, 30));
+        counter.style.colour = colour;
+        let doc = Document {
+            layers: vec![counter],
+        };
+        let out = decode_png(&encode_annotated_png(&image, &doc, None).unwrap()).unwrap();
+        let [r, g, b] = colour.rgb();
+        assert_eq!(rgba(&out, 24, 30), [r, g, b, 255]);
+        assert_eq!(rgba(&out, 34, 30), [0, 0, 0, 255]);
+    }
+}
+
+#[test]
 fn capture_space_mosaics_survive_fit_cropping_and_mid_drag_copy() {
     // Fitting to one third samples only white columns in this pattern.
     let pixels = (0..360 * 180)
