@@ -11,7 +11,6 @@ path = "src/main.rs"
 clap.workspace = true
 snag-core = { path = "../snag-core" }
 ashpd.workspace = true
-futures-lite.workspace = true
 x11rb.workspace = true
 rustix.workspace = true
 wayland-client.workspace = true

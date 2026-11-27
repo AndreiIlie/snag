@@ -13,7 +13,6 @@ serde = { version = "1", features = ["derive"] }
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd"] }
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 ashpd = { version = "0.14.3", default-features = false, features = ["async-io", "screenshot"] }
-futures-lite = "2"
 x11rb = { version = "0.14", features = ["image"] }
 rustix = { version = "1", features = ["fs", "process", "stdio"] }
 wayland-client = "0.31"

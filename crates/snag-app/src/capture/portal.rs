@@ -5,7 +5,7 @@ use std::{error::Error, ffi::OsStr, fs, os::unix::ffi::OsStrExt, path::Path};
 
 pub fn capture() -> Result<Screenshot, Box<dyn Error>> {
     let request = PortalScreenshot::request().interactive(false).modal(false);
-    let result = futures_lite::future::block_on(request.send())?.response()?;
+    let result = ashpd::zbus::block_on(request.send())?.response()?;
     let uri = result.uri().as_str();
     let location = uri
         .strip_prefix("file://")
