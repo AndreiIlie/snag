@@ -124,6 +124,8 @@ mod tests {
             ScaleFactor::ONE,
         )
         .unwrap();
+        assert_eq!(bar.buttons().count(), 23);
+        assert_eq!(bar.buttons().nth(8).unwrap().0, Button::Tool(Tool::Text));
         let expected = Tool::ALL
             .map(Button::Tool)
             .into_iter()

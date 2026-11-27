@@ -87,14 +87,22 @@ pub fn render_overlay(
         }
     }
     draw_selection(&mut frame, view, overlay.selection(), overlay.scale());
-    if let Some(shape) = overlay.selected() {
-        annotations::marker(
+    let border_width = overlay.scale().get().round().max(1.) as f32;
+    if let Some([x, top, bottom]) = overlay.text_caret() {
+        let x = (x * ts.sx + ts.tx).round();
+        annotations::fill_border(
             &mut frame,
-            shape,
-            ts,
             bounds,
-            overlay.scale().get().round().max(1.) as f32,
+            [
+                x,
+                top * ts.sy + ts.ty,
+                x + border_width,
+                bottom * ts.sy + ts.ty,
+            ],
         );
+    }
+    if let Some(shape) = overlay.selected() {
+        annotations::marker(&mut frame, shape, ts, bounds, border_width);
     }
     if let Some(bar) = overlay.toolbar() {
         buttons::draw(&mut frame, bar, overlay);
@@ -188,13 +196,19 @@ mod tests {
         assert_eq!(words[60 * 200 + 5], 0x641e05);
         assert_eq!(words[90 * 200 + 60], 0xc83c0a);
         for (button, r) in overlay.toolbar().unwrap().buttons() {
-            let index = (r.top() * 200 + r.left() + r.width() / 2) as usize;
             let background = if overlay.active(button) {
                 0x1c68ac
             } else {
                 0x21252b
             };
-            assert_eq!(words[index], background);
+            // In compact buttons an antialiased icon can reach the top row.
+            assert!(
+                (r.top()..r.bottom()).any(|y| {
+                    let row = (y * 200) as usize;
+                    words[row + r.left() as usize..row + r.right() as usize].contains(&background)
+                }),
+                "{button:?}"
+            );
         }
         let first = words.clone();
         render_overlay(

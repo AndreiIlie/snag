@@ -38,6 +38,13 @@ pub(crate) fn draw_layer(
     let mut path = PathBuilder::new();
     let (a, b) = shape.ends();
     match shape.tool {
+        Tool::Text => {
+            if let Some(outline) = shape.text.as_ref().and_then(|t| t.line.outline.as_ref()) {
+                let at = ts.pre_translate(a.x as f32, a.y as f32);
+                super::path::draw(frame, at, outline, colour, None);
+            }
+            return;
+        }
         Tool::Rectangle | Tool::Ellipse => {
             let Some(bounds) = Rect::from_ltrb(
                 a.x.min(b.x) as f32,
@@ -62,7 +69,7 @@ pub(crate) fn draw_layer(
             head.line_to(right.x as f32, right.y as f32);
             head.close();
             if let Some(p) = head.finish() {
-                super::path::draw(frame, ts, p, colour, None);
+                super::path::draw(frame, ts, &p, colour, None);
             }
             path.move_to(a.x as f32, a.y as f32);
             path.line_to(base.0 as f32, base.1 as f32);
@@ -71,7 +78,7 @@ pub(crate) fn draw_layer(
             *count += 1;
             let radius = shape.radius() as f32;
             if let Some(circle) = PathBuilder::from_circle(a.x as f32, a.y as f32, radius) {
-                super::path::draw(frame, ts, circle, colour, None);
+                super::path::draw(frame, ts, &circle, colour, None);
             }
             let [r, g, b] = shape.style.colour.rgb().map(u32::from);
             let c = if 299 * r + 587 * g + 114 * b > 128000 {
@@ -92,7 +99,7 @@ pub(crate) fn draw_layer(
         Tool::Pixelate => unreachable!(),
     }
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, colour, Some(&stroke));
+        super::path::draw(frame, ts, &path, colour, Some(&stroke));
     }
 }
 
@@ -136,7 +143,7 @@ fn digits(
         ..Stroke::default()
     };
     if let Some(path) = path.finish() {
-        super::path::draw(frame, ts, path, colour, Some(&stroke));
+        super::path::draw(frame, ts, &path, colour, Some(&stroke));
     }
 }
 
@@ -154,25 +161,29 @@ pub(super) fn marker(
         r as f32 * ts.sx + ts.tx,
         b as f32 * ts.sy + ts.ty,
     );
-    let mut paint = Paint {
-        anti_alias: false,
-        ..Paint::default()
-    };
-    let [red, green, blue, alpha] = super::BORDER;
-    paint.set_color_rgba8(red, green, blue, alpha);
-    for (x, y, end, bottom) in [
-        (l - width, t - width, r + width, t),
-        (l - width, b, r + width, b + width),
-        (l - width, t, l, b),
-        (r, t, r + width, b),
+    for edge in [
+        [l - width, t - width, r + width, t],
+        [l - width, b, r + width, b + width],
+        [l - width, t, l, b],
+        [r, t, r + width, b],
     ] {
-        if let Some(rect) = Rect::from_ltrb(
-            x.max(clip.left() as f32),
-            y.max(clip.top() as f32),
-            end.min(clip.right() as f32),
-            bottom.min(clip.bottom() as f32),
-        ) {
-            frame.fill_rect(rect, &paint, Transform::identity(), None);
-        }
+        fill_border(frame, clip, edge);
+    }
+}
+
+pub(super) fn fill_border(frame: &mut PixmapMut<'_>, clip: PixelRect, [l, t, r, b]: [f32; 4]) {
+    if let Some(rect) = Rect::from_ltrb(
+        l.max(clip.left() as f32),
+        t.max(clip.top() as f32),
+        r.min(clip.right() as f32),
+        b.min(clip.bottom() as f32),
+    ) {
+        let mut paint = Paint {
+            anti_alias: false,
+            ..Paint::default()
+        };
+        let [red, green, blue, alpha] = super::BORDER;
+        paint.set_color_rgba8(red, green, blue, alpha);
+        frame.fill_rect(rect, &paint, Transform::identity(), None);
     }
 }

@@ -1,5 +1,5 @@
 mod hit;
-use crate::{geometry::PixelPoint, history::Command};
+use crate::{font::Line, geometry::PixelPoint, history::Command};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -11,10 +11,11 @@ pub enum Tool {
     Highlighter,
     Pixelate,
     Counter,
+    Text,
 }
 
 impl Tool {
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 9] = [
         Self::Arrow,
         Self::Rectangle,
         Self::Ellipse,
@@ -23,6 +24,7 @@ impl Tool {
         Self::Highlighter,
         Self::Pixelate,
         Self::Counter,
+        Self::Text,
     ];
 }
 
@@ -66,6 +68,14 @@ pub enum Width {
     Thick,
 }
 impl Width {
+    pub(crate) fn text_size(self) -> f32 {
+        match self {
+            Self::Thin => 16.,
+            Self::Medium => 24.,
+            Self::Thick => 40.,
+        }
+    }
+
     pub const ALL: [Self; 3] = [Self::Thin, Self::Medium, Self::Thick];
     pub fn logical(self) -> f64 {
         match self {
@@ -86,9 +96,17 @@ pub struct Style {
 pub struct Annotation {
     pub(crate) tool: Tool,
     pub(crate) style: Style,
-    units: f64,
+    pub(crate) units: f64,
     points: Vec<PixelPoint>,
     pub(crate) offset: PixelPoint,
+    pub(crate) text: Option<Box<Text>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Text {
+    pub content: String,
+    pub size: f32,
+    pub line: Line,
 }
 
 impl Annotation {
@@ -99,6 +117,7 @@ impl Annotation {
             units,
             points: vec![point],
             offset: PixelPoint::ZERO,
+            text: None,
         }
     }
     pub(crate) fn extend(&mut self, point: PixelPoint) -> bool {
@@ -115,6 +134,10 @@ impl Annotation {
     pub(crate) fn drawable(&self) -> bool {
         let (a, b) = self.ends();
         match self.tool {
+            Tool::Text => self
+                .text
+                .as_ref()
+                .is_some_and(|text| text.line.outline.is_some()),
             Tool::Counter => true,
             Tool::Rectangle | Tool::Ellipse | Tool::Pixelate => a.x != b.x && a.y != b.y,
             Tool::Pen | Tool::Highlighter => self.points.len() > 1,

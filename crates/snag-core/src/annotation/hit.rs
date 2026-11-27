@@ -47,7 +47,7 @@ impl Annotation {
         let (a, b) = self.ends();
         let margin = match self.tool {
             Tool::Counter => self.radius(),
-            Tool::Pixelate => 0.,
+            Tool::Pixelate | Tool::Text => 0.,
             _ => self.stroke() / 2.,
         };
         let mut rect = [
@@ -65,6 +65,22 @@ impl Annotation {
         match self.tool {
             Tool::Pen | Tool::Highlighter => self.points().for_each(|p| include(p.into())),
             Tool::Arrow => self.arrow_head().into_iter().for_each(include),
+            Tool::Text if let Some(text) = &self.text => {
+                let line = &text.line;
+                let mut include_offset = |x: f32, y: f32| {
+                    include(Point {
+                        x: a.x as f64 + f64::from(x),
+                        y: a.y as f64 + f64::from(y),
+                    })
+                };
+                include_offset(0., -line.half_height);
+                include_offset(*line.carets.last().unwrap(), line.half_height);
+                if let Some(path) = &line.outline {
+                    let ink = path.bounds();
+                    include_offset(ink.left(), ink.top());
+                    include_offset(ink.right(), ink.bottom());
+                }
+            }
             _ => {}
         }
         [
@@ -86,7 +102,7 @@ impl Annotation {
         let d = tolerance + self.stroke() / 2.;
         match self.tool {
             Tool::Counter => (p.x - a.x).hypot(p.y - a.y) <= self.radius() + tolerance,
-            Tool::Pixelate => true,
+            Tool::Pixelate | Tool::Text => true,
             Tool::Line => segment(p, a, b) <= d,
             Tool::Arrow => {
                 let [tip, left, right] = self.arrow_head();

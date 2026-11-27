@@ -167,14 +167,21 @@ impl ApplicationHandler for App<'_> {
                 event,
                 is_synthetic: false,
                 ..
-            } if event.state.is_pressed() && !event.repeat => {
-                if let Some(key) = shortcut(event.logical_key.as_ref(), self.modifiers) {
-                    let (redraw, closing) = self.model.key(key);
-                    action = closing;
-                    redraw
-                } else {
-                    false
-                }
+            } if event.state.is_pressed() => {
+                let mut changed = false;
+                route_key(
+                    self.model.is_typing(),
+                    event.logical_key.as_ref(),
+                    event.text.as_deref(),
+                    self.modifiers,
+                    event.repeat,
+                    |key| {
+                        let (redraw, closing) = self.model.key(key);
+                        changed |= redraw;
+                        action = closing;
+                    },
+                );
+                changed
             }
             WindowEvent::Focused(false) => {
                 self.modifiers = ModifiersState::empty();
@@ -207,6 +214,47 @@ impl ApplicationHandler for App<'_> {
         if redraw {
             window.request_redraw();
         }
+    }
+}
+
+fn route_key(
+    typing: bool,
+    key: LogicalKey<&str>,
+    text: Option<&str>,
+    modifiers: ModifiersState,
+    repeat: bool,
+    mut send: impl FnMut(Key),
+) {
+    if typing
+        && !modifiers
+            .intersects(ModifiersState::CONTROL | ModifiersState::ALT | ModifiersState::SUPER)
+    {
+        let editing = match key {
+            LogicalKey::Named(NamedKey::Backspace) => Some(Key::Backspace),
+            LogicalKey::Named(NamedKey::Delete) => Some(Key::Delete),
+            LogicalKey::Named(NamedKey::ArrowLeft) => Some(Key::Left),
+            LogicalKey::Named(NamedKey::ArrowRight) => Some(Key::Right),
+            LogicalKey::Named(NamedKey::Home) => Some(Key::Home),
+            LogicalKey::Named(NamedKey::End) => Some(Key::End),
+            _ => None,
+        };
+        if let Some(editing) = editing {
+            send(editing);
+            return;
+        }
+        if !matches!(key, LogicalKey::Named(NamedKey::Enter | NamedKey::Escape)) {
+            for ch in text
+                .unwrap_or_default()
+                .chars()
+                .filter(|ch| !ch.is_control())
+            {
+                send(Key::Character(ch));
+            }
+            return;
+        }
+    }
+    if !repeat && let Some(shortcut) = shortcut(key, modifiers) {
+        send(shortcut);
     }
 }
 
@@ -243,6 +291,7 @@ fn shortcut(key: LogicalKey<&str>, modifiers: ModifiersState) -> Option<Key> {
                 b'm' => Tool::Highlighter,
                 b'b' => Tool::Pixelate,
                 b'n' => Tool::Counter,
+                b't' => Tool::Text,
                 _ => return None,
             };
             Some(Key::Tool(tool))
@@ -255,8 +304,44 @@ fn shortcut(key: LogicalKey<&str>, modifiers: ModifiersState) -> Option<Key> {
 mod tests {
     use super::*;
     #[test]
+    fn typing_routes_composed_text_and_repeats_but_consumes_shortcut_chords() {
+        use LogicalKey::{Character, Named};
+        use ModifiersState as Mods;
+        let keys = |typing, key, text, mods, repeat| {
+            let mut result = Vec::new();
+            route_key(typing, key, text, mods, repeat, |k| result.push(k));
+            result
+        };
+        let plain = Mods::empty();
+        assert_eq!(
+            keys(false, Character("t"), Some("t"), plain, false),
+            [Key::Tool(Tool::Text)]
+        );
+        assert_eq!(
+            keys(true, Character("t"), Some("t"), plain, false),
+            [Key::Character('t')]
+        );
+        assert_eq!(
+            keys(true, Character("e"), Some("Éç"), Mods::SHIFT, true),
+            [Key::Character('É'), Key::Character('ç')]
+        );
+        assert_eq!(
+            keys(true, Named(NamedKey::Backspace), None, plain, true),
+            [Key::Backspace]
+        );
+        assert_eq!(
+            keys(true, Character("c"), Some("c"), Mods::CONTROL, false),
+            [Key::Copy]
+        );
+        assert!(keys(true, Character("v"), Some("v"), Mods::CONTROL, false).is_empty());
+        for typing in [true, false] {
+            assert!(keys(typing, Named(NamedKey::Enter), Some("\r"), plain, true).is_empty());
+        }
+    }
+
+    #[test]
     fn shortcuts_distinguish_tools_from_copy_and_history() {
-        for (c, tool) in ["a", "r", "c", "d", "p", "m", "b", "n"]
+        for (c, tool) in ["a", "r", "c", "d", "p", "m", "b", "n", "t"]
             .into_iter()
             .zip(Tool::ALL)
         {
