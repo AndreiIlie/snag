@@ -3,7 +3,7 @@ use snag_core::{
     geometry::{Point, ScaleFactor},
     overlay::{Cursor, Key, Overlay},
     platform::Screenshot,
-    render::{FrameRenderer, pack_frame},
+    render::{Backdrop, pack_frame, render_overlay},
     selection::Handle,
     toolbar::Action,
     view::View,
@@ -29,7 +29,7 @@ impl OverlayWindow for FullscreenOverlay {
             capture,
             size: PhysicalSize::new(0, 0),
             model: Overlay::new(View::fit(capture, capture).unwrap(), ScaleFactor::ONE),
-            frame: FrameRenderer::new(&shot.image),
+            backdrop: Backdrop::new(&shot.image),
             surface: None,
             modifiers: ModifiersState::empty(),
             cursor: None,
@@ -44,7 +44,7 @@ struct App<'a> {
     capture: (u32, u32),
     size: PhysicalSize<u32>,
     model: Overlay,
-    frame: FrameRenderer<'a>,
+    backdrop: Backdrop<'a>,
     surface: Option<Surface<OwnedDisplayHandle, Rc<Window>>>,
     modifiers: ModifiersState,
     cursor: Option<Cursor>,
@@ -89,8 +89,11 @@ impl App<'_> {
         let surface = self.surface.as_mut().unwrap();
         surface.resize(width, height)?;
         let mut buffer = surface.buffer_mut()?;
-        self.frame
-            .render(&self.model, bytemuck::cast_slice_mut(&mut buffer))?;
+        render_overlay(
+            &mut self.backdrop,
+            &self.model,
+            bytemuck::cast_slice_mut(&mut buffer),
+        )?;
         pack_frame(&mut buffer);
         window.pre_present_notify();
         buffer.present()?;

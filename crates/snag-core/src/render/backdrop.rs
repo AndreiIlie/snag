@@ -3,13 +3,13 @@ use crate::{image::RgbaImage, view::View};
 use tiny_skia::{Color, ColorU8, Pixmap, PixmapMut};
 
 /// Holds at most one resampled capture for the lifetime of the frozen image.
-pub(super) struct Backdrop<'a> {
+pub struct Backdrop<'a> {
     image: &'a RgbaImage,
     scaled: Option<Pixmap>,
 }
 
 impl<'a> Backdrop<'a> {
-    pub(super) fn new(image: &'a RgbaImage) -> Self {
+    pub fn new(image: &'a RgbaImage) -> Self {
         Self {
             image,
             scaled: None,
